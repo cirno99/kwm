@@ -909,10 +909,29 @@ fn rwm_seat_listener(rwm_seat: *river.SeatV1, event: river.SeatV1.Event, seat: *
                 .none => unreachable,
                 .move => |op_data| {
                     if (op_data.seat == seat) {
-                        window.move(
-                            op_data.start_x+data.dx,
-                            op_data.start_y+data.dy,
-                        );
+                        const abs_x = op_data.origin_output.x + op_data.start_x + data.dx;
+                        const abs_y = op_data.origin_output.y + op_data.start_y + data.dy;
+
+                        const current_output = window.output orelse unreachable;
+                        const rel_x = abs_x - current_output.x;
+                        const rel_y = abs_y - current_output.y;
+                        window.move(rel_x, rel_y);
+
+                        const abs_center_x = abs_x + @divTrunc(window.width, 2);
+                        const abs_center_y = abs_y + @divTrunc(window.height, 2);
+
+                        if (ctx.output_at_position(abs_center_x, abs_center_y)) |new_output| {
+                            if (new_output != current_output) {
+                                const new_rel_x = abs_x - new_output.x;
+                                const new_rel_y = abs_y - new_output.y;
+
+                                window.set_output(new_output, true);
+                                window.set_tag(new_output.tag);
+                                window.move(new_rel_x, new_rel_y);
+
+                                ctx.set_current_output(new_output);
+                            }
+                        }
                     }
                 },
                 .resize => |op_data| {
