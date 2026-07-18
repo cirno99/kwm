@@ -128,6 +128,7 @@ operator: union(enum) {
     move: struct {
         start_x: i32,
         start_y: i32,
+        origin_output: *Output,
         seat: *Seat,
     },
     resize: struct {
@@ -649,6 +650,7 @@ pub fn handle_events(self: *Self) void {
                             .move = .{
                                 .start_x = self.x,
                                 .start_y = self.y,
+                                .origin_output = self.output orelse unreachable,
                                 .seat = data.seat,
                             },
                         };

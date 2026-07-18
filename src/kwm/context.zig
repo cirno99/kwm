@@ -628,6 +628,19 @@ pub fn send_to_output(self: *Self, window: *Window, direction: types.Direction) 
 }
 
 
+pub fn output_at_position(self: *Self, abs_x: i32, abs_y: i32) ?*Output {
+    var it = self.outputs.safeIterator(.forward);
+    while (it.next()) |output| {
+        if (abs_x >= output.x and abs_x < output.x + output.width and
+            abs_y >= output.y and abs_y < output.y + output.height)
+        {
+            return output;
+        }
+    }
+    return null;
+}
+
+
 pub inline fn focus_exclusive(self: *Self) bool {
     return if (self.current_seat) |seat| seat.focus_exclusive else false;
 }
