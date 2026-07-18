@@ -293,20 +293,8 @@ pub fn place(self: *Self, pos: types.PlacePosition) void {
 pub fn move(self: *Self, x: ?i32, y: ?i32) void {
     defer log.debug("<{*}> move to (x: {}, y: {})", .{ self, self.x, self.y });
 
-    self.x = @max(
-        ctx.cfg.border.width,
-        @min(
-            x orelse self.x,
-            self.output.?.exclusive_width()-self.width-ctx.cfg.border.width
-        )
-    );
-    self.y = @max(
-        ctx.cfg.border.width,
-        @min(
-            y orelse self.y,
-            self.output.?.exclusive_height()-self.height-ctx.cfg.border.width
-        )
-    );
+    if (x) |new_x| self.x = new_x;
+    if (y) |new_y| self.y = new_y;
 }
 
 
@@ -342,20 +330,8 @@ pub fn resize(self: *Self, width: ?i32, height: ?i32) void {
         .{ self, self.width, self.height },
     );
 
-    self.width = @min(
-        self.output.?.exclusive_width()-self.x-ctx.cfg.border.width,
-        @max(
-            width orelse self.width,
-            self.min_width,
-        )
-    );
-    self.height = @min(
-        self.output.?.exclusive_height()-self.y-ctx.cfg.border.width,
-        @max(
-            height orelse self.height,
-            self.min_height,
-        )
-    );
+    if (width) |new_width| self.width = @max(new_width, self.min_width);
+    if (height) |new_height| self.height = @max(new_height, self.min_height);
 
     if (self.swallowing_border) |*border| {
         border.damage();
