@@ -211,7 +211,9 @@ pub fn manage(self: *Self) void {
     }
 
     if (ctx.cfg.sloppy_focus_output and self.pointer_position.new) {
-        if (ctx.output_at_position(self.pointer_position.x, self.pointer_position.y)) |output| {
+        if (self.window_below_pointer.window) |window| {
+            ctx.focus(window, window.managed_by_layout());
+        } else if (ctx.output_at_position(self.pointer_position.x, self.pointer_position.y)) |output| {
             ctx.set_current_output(output);
         }
     }
@@ -921,7 +923,7 @@ fn rwm_seat_listener(rwm_seat: *river.SeatV1, event: river.SeatV1.Event, seat: *
         .op_delta => |data| {
             log.debug("<{*}> op delta: (dx: {}, dy: {})", .{ seat, data.dx, data.dy });
 
-            const window = ctx.focused_window().?;
+            const window = ctx.focused_window() orelse return;
             switch (window.operator) {
                 .none => unreachable,
                 .move => |op_data| {
