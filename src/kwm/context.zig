@@ -595,6 +595,13 @@ pub fn focus_output_iter(self: *Self, direction: types.Direction) void {
         };
         if (new_output != output) {
             self.set_current_output(new_output);
+
+            if (self.current_seat) |seat| {
+                seat.rwm_seat.pointerWarp(
+                    new_output.exclusive_x() + @divFloor(new_output.exclusive_width(), 2),
+                    new_output.exclusive_y() + @divFloor(new_output.exclusive_height(), 2),
+                );
+            }
         }
     }
 }
