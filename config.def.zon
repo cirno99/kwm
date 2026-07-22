@@ -162,6 +162,8 @@
 
     .sloppy_focus = false,
 
+    .sloppy_focus_output = false,
+
     // .none
     // .on_focus_changed: warp cursor to the center of window focused
     // .on_output_changed: warp cursor to the center of output focused

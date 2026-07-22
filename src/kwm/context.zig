@@ -638,7 +638,22 @@ pub fn send_to_output(self: *Self, window: *Window, direction: types.Direction) 
             ).?
         };
         if (new_output != output) {
+            const old_w = output.exclusive_width();
+            const old_h = output.exclusive_height();
+            const new_w = new_output.exclusive_width();
+            const new_h = new_output.exclusive_height();
+
             window.set_output(new_output, true);
+            if (old_w > 0 and old_h > 0) {
+                window.unbound_move(
+                    @divFloor(window.x * new_w, old_w),
+                    @divFloor(window.y * new_h, old_h),
+                );
+                window.unbound_resize(
+                    @max(1, @divFloor(window.width * new_w, old_w)),
+                    @max(1, @divFloor(window.height * new_h, old_h)),
+                );
+            }
             switch (window.fullscreen) {
                 .output => {
                     window.prepare_fullscreen(new_output);

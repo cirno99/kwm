@@ -44,6 +44,8 @@ pub const Config = struct {
 
     sloppy_focus: bool,
 
+    sloppy_focus_output: bool,
+
     cursor_warp: enum {
         none,
         on_output_changed,
