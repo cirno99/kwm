@@ -26,7 +26,7 @@ const ShellSurface = @import("shell_surface.zig");
 
 const ctx = Context.get();
 const color_pattern = mvzr.compile("\\^#([0-9a-zA-Z]{8}|!)").?;
-pub var status_buffer = [1]u8 { 0 } ** 256;
+pub var status_buffer = [1]u8{0} ** 256;
 
 font: render_.Font = undefined,
 
@@ -45,13 +45,12 @@ dynamic_component_damaged: bool = true,
 background_damaged: bool = true,
 hidden: bool,
 
-dynamic_splits_buffer: [@typeInfo(types.BarArea).@"enum".fields.len-2]i32 = undefined,
+dynamic_splits_buffer: [@typeInfo(types.BarArea).@"enum".fields.len - 2]i32 = undefined,
 static_splits: std.ArrayList(i32) = .empty,
 dynamic_splits: std.ArrayList(i32) = undefined,
 
-
 pub fn init(self: *Self, output: *Output) !void {
-    log.debug("<{*}> init", .{ self });
+    log.debug("<{*}> init", .{self});
 
     const scale = 120;
 
@@ -71,9 +70,8 @@ pub fn init(self: *Self, output: *Output) !void {
     }
 }
 
-
 pub fn deinit(self: *Self) void {
-    log.debug("<{*}> deinit", .{ self });
+    log.debug("<{*}> deinit", .{self});
 
     if (!self.hidden) {
         self.hidden = true;
@@ -84,13 +82,11 @@ pub fn deinit(self: *Self) void {
     self.static_splits.deinit(ctx.gpa);
 }
 
-
 pub inline fn reload_font(self: *Self) void {
-    log.debug("<{*}> reload font", .{ self });
+    log.debug("<{*}> reload font", .{self});
 
     self.font.reload(ctx.cfg.bar.font, self.scale);
 }
-
 
 pub inline fn height(self: *const Self, logical: bool) i32 {
     return if (logical) utils.physics2logical(
@@ -99,7 +95,6 @@ pub inline fn height(self: *const Self, logical: bool) i32 {
         self.scale,
     ) else self.font.height();
 }
-
 
 pub fn handle_click(self: *Self, seat: *Seat) void {
     log.debug("<{*}> handle click by {*}", .{ self, seat });
@@ -118,11 +113,10 @@ pub fn handle_click(self: *Self, seat: *Seat) void {
             }
         },
         .bottom => {
-            if (pointer_y < self.output.y + self.output.height - self.height(true)
-                or pointer_y > self.output.y + self.output.height) {
+            if (pointer_y < self.output.y + self.output.height - self.height(true) or pointer_y > self.output.y + self.output.height) {
                 return;
             }
-        }
+        },
     }
 
     var action: ?binding.Action = null;
@@ -152,7 +146,7 @@ pub fn handle_click(self: *Self, seat: *Seat) void {
     }
 
     x -= self.static_component_width();
-    inline for (0.., &[_]types.BarArea { .mode, .layout, .title }) |i, area_type| {
+    inline for (0.., &[_]types.BarArea{ .mode, .layout, .title }) |i, area_type| {
         if (ctx.cfg.bar.get(area_type)) |area| {
             if (x <= self.dynamic_splits.items[i]) {
                 action = area.click.getter.get(seat.button) orelse return;
@@ -167,7 +161,6 @@ pub fn handle_click(self: *Self, seat: *Seat) void {
         }
     }
 }
-
 
 pub fn toggle(self: *Self) void {
     log.debug("<{*}> toggle: {}", .{ self, !self.hidden });
@@ -184,7 +177,6 @@ pub fn toggle(self: *Self) void {
     }
 }
 
-
 pub fn damage(self: *Self, @"type": enum { all, tags, dynamic, layout, mode, title, status }) void {
     log.debug("<{*}> damage {s}", .{ self, @tagName(@"type") });
 
@@ -200,11 +192,10 @@ pub fn damage(self: *Self, @"type": enum { all, tags, dynamic, layout, mode, tit
     }
 }
 
-
 pub fn render(self: *Self) void {
     if (self.hidden) return;
 
-    log.debug("<{*}> rendering", .{ self });
+    log.debug("<{*}> rendering", .{self});
 
     if (self.static_component_damaged or self.background_damaged) {
         defer self.static_component_damaged = false;
@@ -225,19 +216,16 @@ pub fn render(self: *Self) void {
     }
 }
 
-
 inline fn static_component_width(self: *Self) i32 {
     return self.static_splits.getLastOrNull() orelse 0;
 }
 
-
 inline fn get_pad(self: *const Self) u16 {
-    return @intCast(self.font.height());
+    return @intCast(@divFloor(self.font.height() * 3, 4));
 }
 
-
 fn render_background(self: *Self) void {
-    log.debug("<{*}> rendering background", .{ self });
+    log.debug("<{*}> rendering background", .{self});
 
     const h = self.height(false);
     const logical_h = self.height(true);
@@ -253,18 +241,10 @@ fn render_background(self: *Self) void {
         .bottom => self.output.height - logical_h,
     });
 
-    const buffer = (
-        if (ctx.cfg.bar.empty()) blk: {
-            const rgba = utils.rgba(ctx.cfg.bar.scheme.normal.bg);
-            break :blk ctx.wp_single_pixel_buffer_manager.createU32RgbaBuffer(
-                rgba.r,
-                rgba.g,
-                rgba.b,
-                rgba.a
-            );
-        }
-        else ctx.wp_single_pixel_buffer_manager.createU32RgbaBuffer(0, 0, 0, 0)
-    ) catch |err| {
+    const buffer = (if (ctx.cfg.bar.empty()) blk: {
+        const rgba = utils.rgba(ctx.cfg.bar.scheme.normal.bg);
+        break :blk ctx.wp_single_pixel_buffer_manager.createU32RgbaBuffer(rgba.r, rgba.g, rgba.b, rgba.a);
+    } else ctx.wp_single_pixel_buffer_manager.createU32RgbaBuffer(0, 0, 0, 0)) catch |err| {
         log.err("<{*}> create buffer failed: {}", .{ self, err });
         return;
     };
@@ -278,13 +258,14 @@ fn render_background(self: *Self) void {
 
     self.wl_surface.attach(buffer, 0, 0);
     self.wl_surface.damageBuffer(
-        0, 0,
-        utils.logical2physics(i32, self.output.width, self.scale), h,
+        0,
+        0,
+        utils.logical2physics(i32, self.output.width, self.scale),
+        h,
     );
     self.wp_viewport.setDestination(self.output.width, logical_h);
     self.wl_surface.commit();
 }
-
 
 fn draw_box(
     self: *const Self,
@@ -298,17 +279,15 @@ fn draw_box(
     const h: u16 = @intCast(self.height(false));
     const box_size: u16 = @intCast(@divFloor(h, 6) + 2);
     const box_offset: i16 = @intCast(@divFloor(h, 9));
-    var box = [_]pixman.Rectangle16 {
-        .{
-            .x = x + box_offset,
-            .y = switch (pos) {
-                .top => y + 1,
-                .bottom => @intCast(h - box_size - 1),
-            },
-            .width = box_size,
-            .height = box_size,
-        }
-    };
+    var box = [_]pixman.Rectangle16{.{
+        .x = x + box_offset,
+        .y = switch (pos) {
+            .top => y + 1,
+            .bottom => @intCast(h - box_size - 1),
+        },
+        .width = box_size,
+        .height = box_size,
+    }};
     if (inner) {
         box[0].x += 1;
         box[0].y += 1;
@@ -324,9 +303,8 @@ fn draw_box(
     );
 }
 
-
 fn render_static_component(self: *Self) void {
-    log.debug("<{*}> rendering static component", .{ self });
+    log.debug("<{*}> rendering static component", .{self});
 
     self.static_splits.clearRetainingCapacity();
 
@@ -356,9 +334,7 @@ fn render_static_component(self: *Self) void {
         };
         defer ctx.gpa.free(utf8);
 
-        texts.appendBounded(
-            self.font.rasterize_text_run(utf8) orelse return
-        ) catch unreachable;
+        texts.appendBounded(self.font.rasterize_text_run(utf8) orelse return) catch unreachable;
     }
 
     defer {
@@ -371,7 +347,7 @@ fn render_static_component(self: *Self) void {
     const w: u16 = blk: {
         var width: u16 = 0;
         for (texts.items) |text| {
-            width += @intCast(render_.utils.text_width(text)+pad);
+            width += @intCast(render_.utils.text_width(text) + pad);
             self.static_splits.appendBounded(@intCast(width)) catch unreachable;
         }
         break :blk width;
@@ -389,7 +365,7 @@ fn render_static_component(self: *Self) void {
     const normal_fg = render_.utils.color(scheme.normal.fg);
     const normal_bg = render_.utils.color(scheme.normal.bg);
 
-    const bg_rect = [_]pixman.Rectangle16 {
+    const bg_rect = [_]pixman.Rectangle16{
         .{
             .x = 0,
             .y = 0,
@@ -406,18 +382,16 @@ fn render_static_component(self: *Self) void {
 
         const is_focused = self.output.tag & tag != 0;
 
-        const tag_width: u16 = @intCast(render_.utils.text_width(text)+pad); 
+        const tag_width: u16 = @intCast(render_.utils.text_width(text) + pad);
         defer x += @intCast(tag_width);
 
         if (is_focused) {
-            const tag_rect = [_]pixman.Rectangle16 {
-                .{
-                    .x = x,
-                    .y = y,
-                    .width = tag_width,
-                    .height = h,
-                }
-            };
+            const tag_rect = [_]pixman.Rectangle16{.{
+                .x = x,
+                .y = y,
+                .width = tag_width,
+                .height = h,
+            }};
             _ = pixman.Image.fillRectangles(
                 .src,
                 buffer.image,
@@ -453,7 +427,7 @@ fn render_static_component(self: *Self) void {
             buffer,
             text,
             if (is_focused) &select_fg else &normal_fg,
-            x+@as(i16, @intCast(@divFloor(pad, 2))),
+            x + @as(i16, @intCast(@divFloor(pad, 2))),
             y,
         );
     }
@@ -461,21 +435,18 @@ fn render_static_component(self: *Self) void {
     self.static_component.render(buffer, self.scale);
 }
 
-
 fn render_dynamic_component(self: *Self) void {
-    log.debug("<{*}> rendering dynamic component", .{ self });
+    log.debug("<{*}> rendering dynamic component", .{self});
 
     self.dynamic_splits.clearRetainingCapacity();
 
     const pad = self.get_pad();
-    const w: u16 = @intCast(
-        utils.logical2physics(i32, self.output.width, self.scale)-self.static_component_width()
-    );
+    const w: u16 = @intCast(utils.logical2physics(i32, self.output.width, self.scale) - self.static_component_width());
     const h: u16 = @intCast(self.height(false));
 
     const buffer = self.next_buffer(.dynamic, w, h) orelse return;
 
-    var bg_rect = [_]pixman.Rectangle16 {
+    var bg_rect = [_]pixman.Rectangle16{
         .{
             .x = 0,
             .y = 0,
@@ -501,7 +472,7 @@ fn render_dynamic_component(self: *Self) void {
             buffer,
             tag,
             &fg,
-            x+@as(i16, @intCast(@divFloor(pad, 2))),
+            x + @as(i16, @intCast(@divFloor(pad, 2))),
             y,
         ) + @as(i16, @intCast(pad));
     }
@@ -536,17 +507,16 @@ fn render_dynamic_component(self: *Self) void {
 
                 var buf: [8]u8 = undefined;
                 const str =
-                    if (right-left == 2 or num > 0) fmt.bufPrint(&buf, "{}", .{ num }) catch break :blk tag
-                    else tag[left+2..right];
+                    if (right - left == 2 or num > 0) fmt.bufPrint(&buf, "{}", .{num}) catch break :blk tag else tag[left + 2 .. right];
 
                 const n = mem.replace(
                     u8,
                     tag,
-                    tag[left..right+2],
+                    tag[left .. right + 2],
                     str,
                     &layout_tag_buffer,
                 );
-                break :blk layout_tag_buffer[0..tag.len + str.len*n - (right-left+2)*n];
+                break :blk layout_tag_buffer[0 .. tag.len + str.len * n - (right - left + 2) * n];
             } else break :blk tag;
         };
         if (layout_tag.len == 0) break :draw_layout;
@@ -561,7 +531,7 @@ fn render_dynamic_component(self: *Self) void {
             buffer,
             layout_tag,
             &fg,
-            x+@as(i16, @intCast(@divFloor(pad, 2))),
+            x + @as(i16, @intCast(@divFloor(pad, 2))),
             y,
         ) + @as(i16, @intCast(pad));
     }
@@ -580,13 +550,7 @@ fn render_dynamic_component(self: *Self) void {
 
         const top = ctx.focus_top_in(self.output, false);
         if (top == null) {
-            _ = pixman.Image.fillRectangles(
-                .src,
-                buffer.image,
-                &normal_bg,
-                1,
-                &bg_rect
-            );
+            _ = pixman.Image.fillRectangles(.src, buffer.image, &normal_bg, 1, &bg_rect);
             break :draw_title;
         }
 
@@ -630,18 +594,12 @@ fn render_dynamic_component(self: *Self) void {
             buffer,
             window.title orelse "???",
             fg,
-            x+@as(i16, @intCast(@divFloor(pad, 2))),
+            x + @as(i16, @intCast(@divFloor(pad, 2))),
             y,
         ) + @as(i16, @intCast(pad));
     } else {
         const bg = render_.utils.color(ctx.cfg.bar.scheme.normal.bg);
-        _ = pixman.Image.fillRectangles(
-            .src,
-            buffer.image,
-            &bg,
-            1,
-            &bg_rect
-        );
+        _ = pixman.Image.fillRectangles(.src, buffer.image, &bg, 1, &bg_rect);
     }
     self.dynamic_splits.appendBounded(@intCast(w)) catch unreachable;
 
@@ -686,10 +644,7 @@ fn render_dynamic_component(self: *Self) void {
 
                     texts.append(
                         ctx.gpa,
-                        .{
-                            c,
-                            self.font.rasterize_text_run(utf8) orelse break :status_block
-                        },
+                        .{ c, self.font.rasterize_text_run(utf8) orelse break :status_block },
                     ) catch |err| {
                         log.err("<{*}> append failed: {}", .{ self, err });
                         break :status_block;
@@ -705,7 +660,7 @@ fn render_dynamic_component(self: *Self) void {
                     } else {
                         const hex = match.?.slice[2..];
                         c = render_.utils.color(fmt.parseInt(u32, hex, 16) catch |err| {
-                            log.err("parseInt failed: {}", .{ err });
+                            log.err("parseInt failed: {}", .{err});
                             break :blk;
                         });
                     }
@@ -717,12 +672,9 @@ fn render_dynamic_component(self: *Self) void {
                 _, const text = item;
                 width += render_.utils.text_width(text);
             }
-            x = @max(
-                title_start,
-                @as(i16, @intCast(w -| @as(u16, @intCast(width)) -| pad))
-            );
+            x = @max(title_start, @as(i16, @intCast(w -| @as(u16, @intCast(width)) -| pad)));
 
-            self.dynamic_splits.items[self.dynamic_splits.items.len-1] = x;
+            self.dynamic_splits.items[self.dynamic_splits.items.len - 1] = x;
 
             bg_rect[0].x = x;
             bg_rect[0].width = w - @as(u16, @intCast(x));
@@ -739,11 +691,10 @@ fn render_dynamic_component(self: *Self) void {
     self.dynamic_component.render(buffer, self.scale);
 }
 
-
 fn show(self: *Self) !void {
     std.debug.assert(!self.hidden);
 
-    log.debug("<{*}> show", .{ self });
+    log.debug("<{*}> show", .{self});
 
     const wl_surface = try ctx.wl_compositor.createSurface();
     errdefer wl_surface.destroy();
@@ -776,11 +727,10 @@ fn show(self: *Self) !void {
     }
 }
 
-
 fn hide(self: *Self) void {
     std.debug.assert(self.hidden);
 
-    log.debug("<{*}> hide", .{ self });
+    log.debug("<{*}> hide", .{self});
 
     self.static_component.deinit();
     self.static_component = undefined;
@@ -801,7 +751,6 @@ fn hide(self: *Self) void {
     self.wl_surface = undefined;
 }
 
-
 fn wp_fractional_scale_listener(wp_fractional_scale: *wp.FractionalScaleV1, event: wp.FractionalScaleV1.Event, bar: *Self) void {
     std.debug.assert(wp_fractional_scale == bar.wp_fractional_scale);
 
@@ -814,20 +763,19 @@ fn wp_fractional_scale_listener(wp_fractional_scale: *wp.FractionalScaleV1, even
                 bar.reload_font();
                 bar.damage(.all);
             }
-        }
+        },
     }
 }
-
 
 fn next_buffer(self: *Self, @"type": enum { static, dynamic }, width: i32, height_: i32) ?*render_.Buffer {
     log.debug("<{*}> get buffer for {s}", .{ self, @tagName(@"type") });
 
-    const component =  &switch (@"type") {
+    const component = &switch (@"type") {
         .static => self.static_component,
         .dynamic => self.dynamic_component,
     };
     const buffer = component.next_buffer() orelse {
-        log.warn("<{*}> next_buffer return null", .{ self });
+        log.warn("<{*}> next_buffer return null", .{self});
         return null;
     };
     buffer.init(width, height_) catch |err| {
