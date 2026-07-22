@@ -210,6 +210,12 @@ pub fn manage(self: *Self) void {
         ctx.focus(window, window.managed_by_layout());
     }
 
+    if (ctx.cfg.sloppy_focus_output and self.pointer_position.new) {
+        if (ctx.output_at_position(self.pointer_position.x, self.pointer_position.y)) |output| {
+            ctx.set_current_output(output);
+        }
+    }
+
     self.handle_actions();
 
     if (self.chorded.state != .enabled) {
