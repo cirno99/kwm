@@ -123,6 +123,7 @@ floating_geometry: ?struct {
     width: i32,
     height: i32,
 } = null,
+minimized: bool = false,
 operator: union(enum) {
     none,
     move: struct {
@@ -191,6 +192,8 @@ pub fn destroy(self: *Self) void {
             }
         }
     }
+
+    ctx.remove_minimized(self);
 
     self.set_former_output(null);
 
@@ -462,6 +465,20 @@ pub fn toggle_floating(self: *Self, flag: ?bool) void {
 }
 
 
+pub fn toggle_minimize(self: *Self) void {
+    self.minimized = !self.minimized;
+
+    if (self.minimized) {
+        ctx.push_minimized(self);
+    } else {
+        ctx.remove_minimized(self);
+    }
+
+    if (comptime build_options.bar_enabled) {
+        if (self.output) |output| output.bar.damage(.layout);
+    }
+}
+
 pub fn toggle_maximize(self: *Self, flag: ?bool) void {
     self.maximize =
         if (flag) |maximize| (if (self.maximize != maximize) maximize else return)
@@ -499,6 +516,7 @@ pub fn managed_by_layout(self: *const Self) bool {
 
 
 pub fn is_visible(self: *Self) bool {
+    if (self.minimized) return false;
     if (self.output) |output| {
         return (
             self.sticky or
@@ -510,6 +528,7 @@ pub fn is_visible(self: *Self) bool {
 
 
 pub fn is_visible_in(self: *Self, output: *Output) bool {
+    if (self.minimized) return false;
     if (self.output == null) return false;
 
     if (self.output.? != output) return false;

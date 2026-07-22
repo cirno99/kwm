@@ -63,6 +63,8 @@ current_output: ?*Output = null,
 window_to_lift: ?*Window = null,
 windows: wl.list.Head(Window, .link) = undefined,
 focus_stack: wl.list.Head(Window, .flink) = undefined,
+minimized_order: [32]?*Window = undefined,
+minimized_order_len: usize = 0,
 
 key_repeat: ?KeyRepeat,
 
@@ -597,6 +599,27 @@ pub fn focus_output_iter(self: *Self, direction: types.Direction) void {
     }
 }
 
+
+pub fn push_minimized(self: *Self, window: *Window) void {
+    if (self.minimized_order_len < self.minimized_order.len) {
+        self.minimized_order[self.minimized_order_len] = window;
+        self.minimized_order_len += 1;
+    }
+}
+
+pub fn remove_minimized(self: *Self, window: *Window) void {
+    for (self.minimized_order[0..self.minimized_order_len], 0..) |w, i| {
+        if (w == window) {
+            const last = self.minimized_order_len - 1;
+            if (i < last) {
+                @memmove(self.minimized_order[i..last], self.minimized_order[i + 1 .. last + 1]);
+            }
+            self.minimized_order[self.minimized_order_len - 1] = null;
+            self.minimized_order_len -= 1;
+            break;
+        }
+    }
+}
 
 pub fn send_to_output(self: *Self, window: *Window, direction: types.Direction) void {
     log.debug("send {*} to {s} output", .{ window, @tagName(direction) });
