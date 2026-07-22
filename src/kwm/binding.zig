@@ -120,6 +120,8 @@ pub const Action = union(enum) {
     toggle_window_tag: struct { mask: u32 },
     switch_to_previous_tag,
     toggle_floating,
+    toggle_minimize,
+    restore_minimized,
     toggle_sticky,
     toggle_swallow,
     zoom: struct { swap: bool },

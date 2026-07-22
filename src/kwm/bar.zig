@@ -22,6 +22,7 @@ const binding = @import("binding.zig");
 const Context = @import("context.zig");
 const Seat = @import("seat.zig");
 const Output = @import("output.zig");
+const Window = @import("window.zig");
 const ShellSurface = @import("shell_surface.zig");
 
 const ctx = Context.get();
@@ -48,6 +49,8 @@ hidden: bool,
 dynamic_splits_buffer: [@typeInfo(types.BarArea).@"enum".fields.len - 2]i32 = undefined,
 static_splits: std.ArrayList(i32) = .empty,
 dynamic_splits: std.ArrayList(i32) = undefined,
+minimized_items: [32]struct { x: i32, window: *Window } = undefined,
+minimized_items_len: usize = 0,
 
 pub fn init(self: *Self, output: *Output) !void {
     log.debug("<{*}> init", .{self});
@@ -149,6 +152,17 @@ pub fn handle_click(self: *Self, seat: *Seat) void {
     inline for (0.., &[_]types.BarArea{ .mode, .layout, .title }) |i, area_type| {
         if (ctx.cfg.bar.get(area_type)) |area| {
             if (x <= self.dynamic_splits.items[i]) {
+                if (area_type == .layout and self.minimized_items_len > 0 and x >= self.minimized_items[0].x) {
+                    var idx = self.minimized_items_len;
+                    while (idx > 0) {
+                        idx -= 1;
+                        if (x >= self.minimized_items[idx].x) {
+                            self.minimized_items[idx].window.toggle_minimize();
+                            break;
+                        }
+                    }
+                    return;
+                }
                 action = area.click.getter.get(seat.button) orelse return;
                 return;
             }
@@ -534,6 +548,32 @@ fn render_dynamic_component(self: *Self) void {
             x + @as(i16, @intCast(@divFloor(pad, 2))),
             y,
         ) + @as(i16, @intCast(pad));
+
+        self.minimized_items_len = 0;
+        var it = ctx.windows.safeIterator(.forward);
+        while (it.next()) |window| {
+            if (window.output == self.output and window.minimized and
+                (window.sticky or (window.tag & self.output.tag) != 0))
+            {
+                if (self.minimized_items_len >= self.minimized_items.len) break;
+                self.minimized_items[self.minimized_items_len] = .{ .x = x, .window = window };
+                self.minimized_items_len += 1;
+
+                var buf: [8]u8 = undefined;
+                const label = if (window.title) |t|
+                    if (t.len > 4) t[0..4] else t
+                else
+                    "???";
+                const min_text = fmt.bufPrint(&buf, "[{s}]", .{label}) catch continue;
+                x += self.font.render_str(
+                    buffer,
+                    min_text,
+                    &fg,
+                    x + @as(i16, @intCast(@divFloor(pad, 2))),
+                    y,
+                ) + @as(i16, @intCast(pad));
+            }
+        }
     }
     self.dynamic_splits.appendBounded(x) catch unreachable;
 

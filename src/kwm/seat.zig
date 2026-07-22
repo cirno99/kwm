@@ -657,6 +657,17 @@ fn handle_actions(self: *Self) void {
                     window.toggle_floating(null);
                 }
             },
+            .toggle_minimize => {
+                if (ctx.focused_window()) |window| {
+                    window.toggle_minimize();
+                }
+            },
+            .restore_minimized => {
+                if (ctx.minimized_order_len > 0) {
+                    const window = ctx.minimized_order[ctx.minimized_order_len - 1] orelse return;
+                    window.toggle_minimize();
+                }
+            },
             .toggle_sticky => {
                 if (ctx.focused_window()) |window| {
                     window.toggle_sticky();
