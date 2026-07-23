@@ -117,7 +117,7 @@ pub fn load(
     var buffer = try preprocess.preprocess(.{ .gpa = ctx.gpa, .io = ctx.io, .env = ctx.env }, path);
     defer buffer.deinit(ctx.gpa);
 
-    @setEvalBranchQuota(20000);
+    @setEvalBranchQuota(40000);
     var diag: std.zon.parse.Diagnostics = .{};
     defer diag.deinit(ctx.gpa);
     const config = zon.parse.fromSliceAlloc(

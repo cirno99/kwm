@@ -21,6 +21,7 @@ const BarArea = union(kwm.BarArea) {
     layout: ?kwm.Layout.Type,
     title,
     status,
+    buttons,
 };
 
 
@@ -80,6 +81,20 @@ title: ?struct {
         kwm.Button,
         ?kwm.BindingAction
     ),
+},
+
+buttons: ?struct {
+    buttons: []const struct {
+        label: []const u8,
+        click: meta.enum_struct(
+            kwm.Button,
+            ?kwm.BindingAction
+        ),
+        axis: struct {
+            up: ?kwm.BindingAction,
+            down: ?kwm.BindingAction,
+        },
+    },
 },
 
 status: ?struct {
