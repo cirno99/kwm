@@ -209,14 +209,8 @@ pub fn handle_axis(self: *Self, seat: *Seat, discrete: i32) void {
         const bx = self.button_xs.items[i];
         const bw = self.button_widths.items[i];
         if (x >= bx and x < bx + bw) {
-            var action: ?binding.Action = null;
-            defer if (action) |a| seat.append_action(a);
-
-            if (discrete > 0) {
-                action = button.axis.down;
-            } else {
-                action = button.axis.up;
-            }
+            const action: ?binding.Action = if (discrete > 0) button.axis.down else button.axis.up;
+            if (action) |a| seat.append_action(a);
             return;
         }
     }

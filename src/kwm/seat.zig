@@ -477,7 +477,7 @@ fn warp_cursor(self: *Self, dest: union(enum) { window: *Window, output: *Output
     self.rwm_seat.pointerWarp(x, y);
 }
 
-fn handle_actions(self: *Self) void {
+pub fn handle_actions(self: *Self) void {
     defer self.unhandled_actions.clearRetainingCapacity();
 
     var i: usize = 0;
