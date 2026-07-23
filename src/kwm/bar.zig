@@ -708,6 +708,7 @@ fn render_dynamic_component(self: *Self) void {
         _ = pixman.Image.fillRectangles(.src, buffer.image, &bg, 1, &bg_rect);
     }
     const left_content_end = x;
+    self.dynamic_splits.appendBounded(@intCast(w)) catch unreachable;
 
     self.button_xs.clearRetainingCapacity();
     self.button_widths.clearRetainingCapacity();
