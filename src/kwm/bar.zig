@@ -49,6 +49,8 @@ hidden: bool,
 dynamic_splits_buffer: [@typeInfo(types.BarArea).@"enum".fields.len - 2]i32 = undefined,
 static_splits: std.ArrayList(i32) = .empty,
 dynamic_splits: std.ArrayList(i32) = undefined,
+button_xs: std.ArrayList(i32) = .empty,
+button_widths: std.ArrayList(i32) = .empty,
 minimized_items: [32]struct { x: i32, window: *Window } = undefined,
 minimized_items_len: usize = 0,
 
@@ -67,6 +69,8 @@ pub fn init(self: *Self, output: *Output) !void {
     errdefer self.font.deinit();
 
     self.dynamic_splits = .initBuffer(&self.dynamic_splits_buffer);
+    self.button_xs = .empty;
+    self.button_widths = .empty;
 
     if (!self.hidden) {
         try self.show();
@@ -83,6 +87,8 @@ pub fn deinit(self: *Self) void {
     self.font.deinit();
 
     self.static_splits.deinit(ctx.gpa);
+    self.button_xs.deinit(ctx.gpa);
+    self.button_widths.deinit(ctx.gpa);
 }
 
 pub inline fn reload_font(self: *Self) void {
@@ -149,7 +155,7 @@ pub fn handle_click(self: *Self, seat: *Seat) void {
     }
 
     x -= self.static_component_width();
-    inline for (0.., &[_]types.BarArea{ .mode, .layout, .title }) |i, area_type| {
+    inline for (0.., &[_]types.BarArea{ .mode, .layout }) |i, area_type| {
         if (ctx.cfg.bar.get(area_type)) |area| {
             if (x <= self.dynamic_splits.items[i]) {
                 if (area_type == .layout and self.minimized_items_len > 0 and x >= self.minimized_items[0].x) {
@@ -169,9 +175,68 @@ pub fn handle_click(self: *Self, seat: *Seat) void {
         }
     }
 
-    if (ctx.cfg.bar.status) |area| {
-        if (x > self.dynamic_splits.getLast()) {
+    if (ctx.cfg.bar.buttons) |buttons_cfg| {
+        for (buttons_cfg.buttons, 0..) |button, i| {
+            if (i >= self.button_xs.items.len) break;
+            const bx = self.button_xs.items[i];
+            const bw = self.button_widths.items[i];
+            if (x >= bx and x < bx + bw) {
+                action = button.click.getter.get(seat.button) orelse return;
+                return;
+            }
+        }
+    }
+
+    if (ctx.cfg.bar.title) |area| {
+        const status_start = self.dynamic_splits.getLast();
+        if (x <= status_start) {
             action = area.click.getter.get(seat.button) orelse return;
+            return;
+        }
+    }
+
+    if (ctx.cfg.bar.status) |area| {
+        const status_start = self.dynamic_splits.getLast();
+        if (x > status_start) {
+            action = area.click.getter.get(seat.button) orelse return;
+        }
+    }
+}
+
+pub fn handle_axis(self: *Self, seat: *Seat, discrete: i32) void {
+    if (self.hidden) return;
+
+    const pointer_x = seat.pointer_position.x;
+    const pointer_y = seat.pointer_position.y;
+
+    if (pointer_x < self.output.x or pointer_x > self.output.x + self.output.width) return;
+    switch (ctx.cfg.bar.position) {
+        .top => {
+            if (pointer_y < self.output.y or pointer_y > self.output.y + self.height(true)) return;
+        },
+        .bottom => {
+            if (pointer_y < self.output.y + self.output.height - self.height(true) or pointer_y > self.output.y + self.output.height) return;
+        },
+    }
+
+    const buttons_cfg = ctx.cfg.bar.buttons orelse return;
+    var x = utils.logical2physics(i32, pointer_x - self.output.x, self.scale);
+    x -= self.static_component_width();
+
+    for (buttons_cfg.buttons, 0..) |button, i| {
+        if (i >= self.button_xs.items.len) break;
+        const bx = self.button_xs.items[i];
+        const bw = self.button_widths.items[i];
+        if (x >= bx and x < bx + bw) {
+            var action: ?binding.Action = null;
+            defer if (action) |a| seat.append_action(a);
+
+            if (discrete > 0) {
+                action = button.axis.down;
+            } else {
+                action = button.axis.up;
+            }
+            return;
         }
     }
 }
@@ -582,7 +647,6 @@ fn render_dynamic_component(self: *Self) void {
     bg_rect[0].x = x;
     bg_rect[0].width = w - @as(u16, @intCast(x));
 
-    const title_start = x;
     if (ctx.cfg.bar.title) |_| draw_title: {
         const scheme = ctx.cfg.bar.get_scheme(.title);
         const normal_fg = render_.utils.color(scheme.normal.fg);
@@ -643,90 +707,132 @@ fn render_dynamic_component(self: *Self) void {
         const bg = render_.utils.color(ctx.cfg.bar.scheme.normal.bg);
         _ = pixman.Image.fillRectangles(.src, buffer.image, &bg, 1, &bg_rect);
     }
-    self.dynamic_splits.appendBounded(@intCast(w)) catch unreachable;
+    const left_content_end = x;
 
-    if (ctx.cfg.bar.status) |area| draw_status: {
-        const status_text: []const u8 = mem.trimEnd(
+    self.button_xs.clearRetainingCapacity();
+    self.button_widths.clearRetainingCapacity();
+
+    // measurement pass
+    var btn_datas: std.ArrayList(struct { *const fcft.TextRun, i32 }) = .empty;
+    defer {
+        for (btn_datas.items) |d| d[0].destroy();
+        btn_datas.deinit(ctx.gpa);
+    }
+
+    if (ctx.cfg.bar.buttons) |buttons_cfg| {
+        for (buttons_cfg.buttons) |button| {
+            const utf8 = render_.utils.to_utf8(ctx.gpa, button.label) catch break;
+            defer ctx.gpa.free(utf8);
+            const text = self.font.rasterize_text_run(utf8) orelse break;
+            const tw = render_.utils.text_width(text);
+            btn_datas.append(ctx.gpa, .{ text, @as(i32, @intCast(tw)) + pad }) catch unreachable;
+        }
+    }
+
+    var total_button_width: i32 = 0;
+    for (btn_datas.items) |d| total_button_width += d[1];
+
+    var status_datas: std.ArrayList(struct { pixman.Color, *const fcft.TextRun }) = .empty;
+    defer {
+        for (status_datas.items) |d| d[1].destroy();
+        status_datas.deinit(ctx.gpa);
+    }
+    var status_raw: []const u8 = "";
+    if (ctx.cfg.bar.status) |status_area| {
+        status_raw = mem.trimEnd(
             u8,
-            switch (area.data) {
-                .text => |text| text,
+            switch (status_area.data) {
+                .text => |t| t,
                 else => mem.span(@as([*:0]const u8, @ptrCast(&status_buffer))),
             },
             "\n ",
         );
-        if (status_text.len == 0) break :draw_status;
+    }
 
-        const color = ctx.cfg.bar.get_scheme(.status).normal;
-        const fg = render_.utils.color(color.fg);
-        const bg = render_.utils.color(color.bg);
-
-        status_block: {
-            var texts: std.ArrayList(struct { pixman.Color, *const fcft.TextRun }) = .empty;
-            defer {
-                for (texts.items) |item| {
-                    item[1].destroy();
+    if (status_raw.len > 0) {
+        const sc = ctx.cfg.bar.get_scheme(.status).normal;
+        const sf = render_.utils.color(sc.fg);
+        var cc = sf;
+        var i: usize = 0;
+        var it = color_pattern.iterator(status_raw);
+        var match = it.next();
+        while (i < status_raw.len) {
+            if (match == null or i < match.?.start) {
+                const end = if (match) |m| m.start else status_raw.len;
+                defer i = end;
+                const utf8 = render_.utils.to_utf8(ctx.gpa, status_raw[i..end]) catch break;
+                defer ctx.gpa.free(utf8);
+                const text = self.font.rasterize_text_run(utf8) orelse break;
+                status_datas.append(ctx.gpa, .{ cc, text }) catch unreachable;
+            } else if (i == match.?.start) {
+                defer {
+                    i += match.?.slice.len;
+                    match = it.next();
                 }
-                texts.deinit(ctx.gpa);
-            }
+                if (match.?.slice.len == 3) {
+                    cc = sf;
+                } else {
+                    const hex = match.?.slice[2..];
+                    cc = render_.utils.color(fmt.parseInt(u32, hex, 16) catch break);
+                }
+            } else unreachable;
+        }
+    }
 
-            var i: usize = 0;
-            var c = fg;
-            var it = color_pattern.iterator(status_text);
-            var match = it.next();
-            while (i < status_text.len) {
-                if (match == null or i < match.?.start) {
-                    const end = if (match) |m| m.start else status_text.len;
-                    defer i = end;
+    var total_status_width: i32 = 0;
+    for (status_datas.items) |d| total_status_width += @as(i32, @intCast(render_.utils.text_width(d[1])));
 
-                    const utf8 = render_.utils.to_utf8(ctx.gpa, status_text[i..end]) catch |err| {
-                        log.warn("<{*}> to_utf8 failed: {}", .{ self, err });
-                        break :status_block;
-                    };
-                    defer ctx.gpa.free(utf8);
+    const total_right_width = total_button_width + total_status_width;
+    const right_block_x: i16 = @intCast(@max(
+        left_content_end,
+        @as(i32, @intCast(w)) -| total_right_width -| pad,
+    ));
 
-                    texts.append(
-                        ctx.gpa,
-                        .{ c, self.font.rasterize_text_run(utf8) orelse break :status_block },
-                    ) catch |err| {
-                        log.err("<{*}> append failed: {}", .{ self, err });
-                        break :status_block;
-                    };
-                } else if (i == match.?.start) blk: {
-                    defer {
-                        i += match.?.slice.len;
-                        match = it.next();
-                    }
+    // render pass
+    if (ctx.cfg.bar.buttons) |_| {
+        const btn_scheme = ctx.cfg.bar.get_scheme(.buttons).normal;
+        const btn_fg = render_.utils.color(btn_scheme.fg);
+        const btn_bg = render_.utils.color(btn_scheme.bg);
 
-                    if (match.?.slice.len == 3) {
-                        c = fg;
-                    } else {
-                        const hex = match.?.slice[2..];
-                        c = render_.utils.color(fmt.parseInt(u32, hex, 16) catch |err| {
-                            log.err("parseInt failed: {}", .{err});
-                            break :blk;
-                        });
-                    }
-                } else unreachable;
-            }
+        var bx = right_block_x;
+        for (btn_datas.items) |d| {
+            const text = d[0];
+            const bw: i16 = @intCast(d[1]);
 
-            var width: u32 = 0;
-            for (texts.items) |item| {
-                _, const text = item;
-                width += render_.utils.text_width(text);
-            }
-            x = @max(title_start, @as(i16, @intCast(w -| @as(u16, @intCast(width)) -| pad)));
+            self.button_xs.append(ctx.gpa, bx) catch unreachable;
+            self.button_widths.append(ctx.gpa, bw) catch unreachable;
 
-            self.dynamic_splits.items[self.dynamic_splits.items.len - 1] = x;
+            bg_rect[0].x = bx;
+            bg_rect[0].width = @as(u16, @intCast(bw));
+            _ = pixman.Image.fillRectangles(.src, buffer.image, &btn_bg, 1, &bg_rect);
 
-            bg_rect[0].x = x;
-            bg_rect[0].width = w - @as(u16, @intCast(x));
-            _ = pixman.Image.fillRectangles(.src, buffer.image, &bg, 1, &bg_rect);
+            _ = self.font.render_text(
+                buffer,
+                text,
+                &btn_fg,
+                bx + @as(i16, @intCast(@divFloor(pad, 2))),
+                y,
+            );
+            bx += bw;
+        }
+    }
 
-            x += @as(i16, @intCast(@divFloor(pad, 2)));
-            for (texts.items) |item| {
-                const cc, const text = item;
-                x += self.font.render_text(buffer, text, &cc, x, y);
-            }
+    if (status_raw.len > 0) {
+        const ss = ctx.cfg.bar.get_scheme(.status).normal;
+        const sbg = render_.utils.color(ss.bg);
+
+        var sx = right_block_x + @as(i16, @intCast(total_button_width));
+
+        self.dynamic_splits.items[self.dynamic_splits.items.len - 1] = sx;
+
+        bg_rect[0].x = sx;
+        bg_rect[0].width = w - @as(u16, @intCast(sx));
+        _ = pixman.Image.fillRectangles(.src, buffer.image, &sbg, 1, &bg_rect);
+
+        sx += @as(i16, @intCast(@divFloor(pad, 2)));
+        for (status_datas.items) |d| {
+            const cc, const text = d;
+            sx += self.font.render_text(buffer, text, &cc, sx, y);
         }
     }
 

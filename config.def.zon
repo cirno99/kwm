@@ -111,6 +111,23 @@
                 .left = .{ .zoom = .{ .swap = false } },
             },
         },
+        // set null to disable buttons
+        // .buttons = .{
+        //     .buttons = .{
+        //         .{
+        //             .label = "BTN",
+        //             .click = .{
+        //                 .left = .{ .spawn = .{ .argv = .{ "foot" } } },
+        //             },
+        //             .axis = .{
+        //                 .up = .{ .spawn = .{ .argv = .{ "pamixer", "-i", "5" } } },
+        //                 .down = .{ .spawn = .{ .argv = .{ "pamixer", "-d", "5" } } },
+        //             },
+        //         },
+        //     },
+        // },
+        .buttons = null,
+
         // set null to disable status part
         .status = .{
             .data = .{ .text = "^#ff0000ffk^#00ff00ffw^#0000ffffm" }, // .stdin or .{ .fifo = "fifo file path" }, could use ^#RGBA to switch text color, and use ^#! to switch back to default color
@@ -122,12 +139,13 @@
 
         // override colors
         .override_colors = .{
-            // areas:
-            //      .tags
-            //      .{ .mode = "floating" or other modes }, null will match all mode
-            //      .{ layout = .tile or other layout }, null will match all layouts
-            //      .title
-            //      .status
+        // areas:
+        //      .tags
+        //      .{ .mode = "floating" or other modes }, null will match all mode
+        //      .{ layout = .tile or other layout }, null will match all layouts
+        //      .title
+        //      .status
+        //      .buttons
             //
             // scheme is a struct, no need to specify all fields:
             //      .{

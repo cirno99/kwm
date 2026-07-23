@@ -1172,6 +1172,18 @@ fn wl_pointer_listener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *
                 cursor_shape_device.setShape(0, .default);
             }
         },
+        .axis_discrete => |data| {
+            log.debug("<{*}> axis_discrete: (axis: {}, discrete: {})", .{ seat, @intFromEnum(data.axis), data.discrete });
+
+            if (data.axis != .vertical_scroll) return;
+
+            var it = ctx.outputs.safeIterator(.forward);
+            while (it.next()) |output| {
+                if (comptime build_options.bar_enabled) {
+                    output.bar.handle_axis(seat, data.discrete);
+                }
+            }
+        },
         else => {}
     }
 }
