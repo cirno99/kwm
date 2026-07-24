@@ -955,7 +955,12 @@ fn swallow(self: *Self, window: *Self) void {
         }
     }
 
-    self.swallowing_border = undefined;
+    self.swallowing_border = .{
+        .wl_surface = undefined,
+        .wp_viewport = undefined,
+        .rwm_decoration = undefined,
+        .window = self,
+    };
     self.swallowing_border.?.init(self) catch |err| {
         self.swallowing_border = null;
         log.err("<{*}> init custom decoration failed: {}", .{ self, err });
