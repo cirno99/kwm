@@ -130,7 +130,7 @@ pub fn init(
         .rwm = rwm,
         .rwm_xkb_bindings = rwm_xkb_bindings,
         .rwm_layer_shell = rwm_layer_shell,
-        .key_repeat = undefined,
+        .key_repeat = .{ .timer_fd = undefined },
         .terminal_windows = .init(gpa),
         .output_states = .init(gpa),
         .mode = fmt.bufPrint(&mode_buffer, "{s}", .{ config.default_mode }) catch return error.ModeNameTooLong,
