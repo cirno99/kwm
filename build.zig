@@ -335,7 +335,4 @@ pub fn build(b: *std.Build) void {
 }
 
 
-fn get_path(b: *std.Build, path: std.Build.LazyPath) []const u8 {
-    const p = path.getPath3(b, null);
-    return b.pathResolve(&.{ p.root_dir.path orelse ".", p.sub_path });
-}
+
