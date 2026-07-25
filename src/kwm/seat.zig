@@ -196,7 +196,7 @@ pub fn manage(self: *Self) void {
     if (ctx.cfg.sloppy_focus and self.window_below_pointer.new and self.pointer_position.new) {
         defer self.window_below_pointer.new = false;
 
-        const window = self.window_below_pointer.window.?;
+        const window = self.window_below_pointer.window orelse return;
 
         ctx.focus(window, window.managed_by_layout());
     }
@@ -217,7 +217,7 @@ pub fn manage(self: *Self) void {
 
             // restore mode
             self.toggle_bindings(ctx.mode, false);
-            ctx.switch_mode(self.mode.?);
+            ctx.switch_mode(self.mode orelse ctx.mode);
 
             // reset self.mode, sync with context.mode later
             self.mode = null;
@@ -233,6 +233,7 @@ pub fn manage(self: *Self) void {
                 log.debug("<{*}> entering chorded", .{self});
 
                 self.chorded.state = .enabled;
+                self.mode = fmt.bufPrint(&self.mode_buffer, "{s}", .{ ctx.mode }) catch unreachable;
             } else {
                 self.mode = fmt.bufPrint(&self.mode_buffer, "{s}", .{ctx.mode}) catch unreachable;
             }

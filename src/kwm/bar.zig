@@ -398,17 +398,17 @@ fn render_static_component(self: *Self) void {
     }
 
     const pad = self.get_pad();
-    const w: u16 = blk: {
-        var width: u16 = 0;
-        for (texts.items) |text| {
-            width += @intCast(render_.utils.text_width(text) + pad);
-            self.static_splits.appendBounded(@intCast(width)) catch unreachable;
-        }
-        break :blk width;
-    };
-    const h: u16 = @intCast(self.height(false));
-
-    const buffer = self.next_buffer(.static, w, h) orelse return;
+    var total_tag_width: i32 = 0;
+    for (texts.items) |text| {
+        const tw = @as(i32, @intCast(render_.utils.text_width(text))) + @as(i32, pad);
+        if (tw <= 0) continue;
+        total_tag_width += tw;
+        self.static_splits.appendBounded(total_tag_width) catch unreachable;
+    }
+    if (total_tag_width <= 0) return;
+    const h = self.height(false);
+    if (h <= 0) return;
+    const buffer = self.next_buffer(.static, @intCast(total_tag_width), @intCast(h)) orelse return;
 
     const windows_tag: u32 = self.output.occupied_tags();
     const focused_window = ctx.focused_window();
@@ -419,32 +419,33 @@ fn render_static_component(self: *Self) void {
     const normal_fg = render_.utils.color(scheme.normal.fg);
     const normal_bg = render_.utils.color(scheme.normal.bg);
 
+    const rect_w: u16 = @intCast(@min(total_tag_width, @as(i32, std.math.maxInt(u16))));
+    const rect_h: u16 = @intCast(@min(h, @as(i32, std.math.maxInt(u16))));
     const bg_rect = [_]pixman.Rectangle16{
-        .{
-            .x = 0,
-            .y = 0,
-            .width = w,
-            .height = h,
-        },
+        .{ .x = 0, .y = 0, .width = rect_w, .height = rect_h },
     };
     _ = pixman.Image.fillRectangles(.src, buffer.image, &normal_bg, 1, &bg_rect);
 
-    var x: i16 = 0;
+    var x: i32 = 0;
     const y: i16 = 0;
     for (0.., texts.items) |i, text| {
         const tag: u32 = @as(u32, @intCast(1)) << @as(u5, @intCast(i));
 
         const is_focused = self.output.tag & tag != 0;
 
-        const tag_width: u16 = @intCast(render_.utils.text_width(text) + pad);
-        defer x += @intCast(tag_width);
+        const tw = @as(i32, @intCast(render_.utils.text_width(text))) + @as(i32, pad);
+        if (tw <= 0) {
+            x += tw;
+            continue;
+        }
+        defer x += tw;
 
         if (is_focused) {
             const tag_rect = [_]pixman.Rectangle16{.{
-                .x = x,
+                .x = @intCast(@min(x, @as(i32, std.math.maxInt(i16)))),
                 .y = y,
-                .width = tag_width,
-                .height = h,
+                .width = @intCast(@min(tw, @as(i32, std.math.maxInt(u16)))),
+                .height = rect_h,
             }};
             _ = pixman.Image.fillRectangles(
                 .src,
@@ -461,7 +462,7 @@ fn render_static_component(self: *Self) void {
                 false,
                 .top,
                 if (is_focused) &select_fg else &normal_fg,
-                x,
+                @intCast(@min(x, @as(i32, std.math.maxInt(i16)))),
                 y,
             );
 
@@ -471,7 +472,7 @@ fn render_static_component(self: *Self) void {
                     true,
                     .top,
                     if (is_focused) &select_bg else &normal_bg,
-                    x,
+                    @intCast(@min(x, @as(i32, std.math.maxInt(i16)))),
                     y,
                 );
             }
@@ -481,7 +482,7 @@ fn render_static_component(self: *Self) void {
             buffer,
             text,
             if (is_focused) &select_fg else &normal_fg,
-            x + @as(i16, @intCast(@divFloor(pad, 2))),
+            x + @as(i32, @intCast(@divFloor(pad, 2))),
             y,
         );
     }
@@ -495,21 +496,18 @@ fn render_dynamic_component(self: *Self) void {
     self.dynamic_splits.clearRetainingCapacity();
 
     const pad = self.get_pad();
-    const w: u16 = @intCast(utils.logical2physics(i32, self.output.width, self.scale) - self.static_component_width());
-    const h: u16 = @intCast(self.height(false));
+    const width = utils.logical2physics(i32, self.output.width, self.scale) - self.static_component_width();
+    if (width <= 0 or self.height(false) <= 0) return;
+    const bw: u16 = @intCast(@min(width, @as(i32, std.math.maxInt(u16))));
+    const bh: u16 = @intCast(@min(self.height(false), @as(i32, std.math.maxInt(u16))));
 
-    const buffer = self.next_buffer(.dynamic, w, h) orelse return;
+    const buffer = self.next_buffer(.dynamic, bw, bh) orelse return;
 
     var bg_rect = [_]pixman.Rectangle16{
-        .{
-            .x = 0,
-            .y = 0,
-            .width = w,
-            .height = h,
-        },
+        .{ .x = 0, .y = 0, .width = bw, .height = bh },
     };
 
-    var x: i16 = 0;
+    var x: i32 = 0;
     const y: i16 = 0;
 
     if (ctx.cfg.bar.mode) |area| draw_mode: {
@@ -532,8 +530,8 @@ fn render_dynamic_component(self: *Self) void {
     }
     self.dynamic_splits.appendBounded(x) catch unreachable;
 
-    bg_rect[0].x = x;
-    bg_rect[0].width = w - @as(u16, @intCast(x));
+    bg_rect[0].x = @intCast(@min(x, @as(i32, std.math.maxInt(i16))));
+    bg_rect[0].width = bw - @as(u16, @intCast(@min(x, @as(i32, bw))));
 
     if (ctx.cfg.bar.layout) |area| draw_layout: {
         var layout_tag_buffer: [32]u8 = undefined;
@@ -617,8 +615,8 @@ fn render_dynamic_component(self: *Self) void {
     }
     self.dynamic_splits.appendBounded(x) catch unreachable;
 
-    bg_rect[0].x = x;
-    bg_rect[0].width = w - @as(u16, @intCast(x));
+    bg_rect[0].x = @intCast(@min(x, @as(i32, std.math.maxInt(i16))));
+    bg_rect[0].width = bw - @as(u16, @intCast(@min(x, @as(i32, bw))));
 
     if (ctx.cfg.bar.title) |_| draw_title: {
         const scheme = ctx.cfg.bar.get_scheme(.title);
@@ -646,7 +644,7 @@ fn render_dynamic_component(self: *Self) void {
         _ = pixman.Image.fillRectangles(.src, buffer.image, bg, 1, &bg_rect);
 
         if (window.sticky) {
-            self.draw_box(buffer, false, .top, fg, x, y);
+            self.draw_box(buffer, false, .top, fg, @intCast(@min(x, @as(i32, std.math.maxInt(i16)))), y);
         }
 
         if (window.floating) {
@@ -655,7 +653,7 @@ fn render_dynamic_component(self: *Self) void {
                 false,
                 if (window.sticky) .bottom else .top,
                 fg,
-                x,
+                @intCast(@min(x, @as(i32, std.math.maxInt(i16)))),
                 y,
             );
 
@@ -664,7 +662,7 @@ fn render_dynamic_component(self: *Self) void {
                 true,
                 if (window.sticky) .bottom else .top,
                 bg,
-                x,
+                @intCast(@min(x, @as(i32, std.math.maxInt(i16)))),
                 y,
             );
         }
@@ -681,7 +679,7 @@ fn render_dynamic_component(self: *Self) void {
         _ = pixman.Image.fillRectangles(.src, buffer.image, &bg, 1, &bg_rect);
     }
     const left_content_end = x;
-    self.dynamic_splits.appendBounded(@intCast(w)) catch unreachable;
+    self.dynamic_splits.appendBounded(@intCast(bw)) catch unreachable;
 
     self.button_xs.clearRetainingCapacity();
     self.button_widths.clearRetainingCapacity();
@@ -699,7 +697,10 @@ fn render_dynamic_component(self: *Self) void {
             defer ctx.gpa.free(utf8);
             const text = self.font.rasterize_text_run(utf8) orelse break;
             const tw = render_.utils.text_width(text);
-            btn_datas.append(ctx.gpa, .{ text, @as(i32, @intCast(tw)) + pad }) catch unreachable;
+            btn_datas.append(ctx.gpa, .{ text, @as(i32, @intCast(tw)) + pad }) catch |err| {
+                log.warn("append button datas failed: {}", .{err});
+                break;
+            };
         }
     }
 
@@ -736,7 +737,10 @@ fn render_dynamic_component(self: *Self) void {
                 const utf8 = render_.utils.to_utf8(ctx.gpa, status_raw[i..end]) catch break;
                 defer ctx.gpa.free(utf8);
                 const text = self.font.rasterize_text_run(utf8) orelse break;
-                status_datas.append(ctx.gpa, .{ cc, text }) catch unreachable;
+                status_datas.append(ctx.gpa, .{ cc, text }) catch |err| {
+                    log.warn("append status datas failed: {}", .{err});
+                    break;
+                };
                 i = end;
             } else if (i == match.?.start) {
                 if (match.?.slice.len == 3) {
@@ -757,7 +761,7 @@ fn render_dynamic_component(self: *Self) void {
     const total_right_width = total_button_width + total_status_width;
     const right_block_x: i16 = @intCast(@max(
         left_content_end,
-        @as(i32, @intCast(w)) -| total_right_width -| pad,
+        @as(i32, bw) -| total_right_width -| pad,
     ));
 
     // render pass
@@ -769,23 +773,29 @@ fn render_dynamic_component(self: *Self) void {
         var bx = right_block_x;
         for (btn_datas.items) |d| {
             const text = d[0];
-            const bw: i16 = @intCast(d[1]);
+            const btn_w: i16 = @intCast(@min(d[1], @as(i32, std.math.maxInt(i16))));
 
-            self.button_xs.append(ctx.gpa, bx) catch unreachable;
-            self.button_widths.append(ctx.gpa, bw) catch unreachable;
+            self.button_xs.append(ctx.gpa, bx) catch |err| {
+                log.warn("append button xs failed: {}", .{err});
+                break;
+            };
+            self.button_widths.append(ctx.gpa, btn_w) catch |err| {
+                log.warn("append button widths failed: {}", .{err});
+                break;
+            };
 
             bg_rect[0].x = bx;
-            bg_rect[0].width = @as(u16, @intCast(bw));
+            bg_rect[0].width = @as(u16, @intCast(@max(btn_w, 0)));
             _ = pixman.Image.fillRectangles(.src, buffer.image, &btn_bg, 1, &bg_rect);
 
             _ = self.font.render_text(
                 buffer,
                 text,
                 &btn_fg,
-                bx + @as(i16, @intCast(@divFloor(pad, 2))),
+                @as(i32, bx) + @as(i32, @divFloor(pad, 2)),
                 y,
             );
-            bx += bw;
+            bx +|= btn_w;
         }
     }
 
@@ -798,7 +808,7 @@ fn render_dynamic_component(self: *Self) void {
         self.dynamic_splits.items[self.dynamic_splits.items.len - 1] = sx;
 
         bg_rect[0].x = sx;
-        bg_rect[0].width = w - @as(u16, @intCast(sx));
+        bg_rect[0].width = bw - @as(u16, @intCast(@min(@as(i32, sx), @as(i32, bw))));
         _ = pixman.Image.fillRectangles(.src, buffer.image, &sbg, 1, &bg_rect);
 
         sx += @as(i16, @intCast(@divFloor(pad, 2)));
