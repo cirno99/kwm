@@ -332,13 +332,12 @@ pub fn create_bindings(self: *Self) void {
 
     for (ctx.cfg.bindings.key) |key_binding| {
         const mode = key_binding.mode orelse config.default_mode;
-        if (!self.xkb_bindings.contains(mode)) {
-            self.xkb_bindings.put(mode, .empty) catch |err| {
-                log.err("<{*}> put a new xkb binding list failed: {}", .{ self, err });
-                continue;
-            };
-        }
-        const list = self.xkb_bindings.getPtr(mode).?;
+        const xkb_gop = self.xkb_bindings.getOrPut(mode) catch |err| {
+            log.err("<{*}> getOrPut xkb binding list failed: {}", .{ self, err });
+            continue;
+        };
+        if (!xkb_gop.found_existing) xkb_gop.value_ptr.* = .empty;
+        const list = xkb_gop.value_ptr;
 
         list.append(
             ctx.gpa,
@@ -378,13 +377,12 @@ pub fn create_bindings(self: *Self) void {
 
     for (ctx.cfg.bindings.pointer) |pointer_binding| {
         const mode = pointer_binding.mode orelse config.default_mode;
-        if (!self.pointer_bindings.contains(mode)) {
-            self.pointer_bindings.put(mode, .empty) catch |err| {
-                log.err("<{*}> put a new pointer binding list failed: {}", .{ self, err });
-                continue;
-            };
-        }
-        const list = self.pointer_bindings.getPtr(mode).?;
+        const ptr_gop = self.pointer_bindings.getOrPut(mode) catch |err| {
+            log.err("<{*}> getOrPut pointer binding list failed: {}", .{ self, err });
+            continue;
+        };
+        if (!ptr_gop.found_existing) ptr_gop.value_ptr.* = .empty;
+        const list = ptr_gop.value_ptr;
 
         list.append(
             ctx.gpa,
