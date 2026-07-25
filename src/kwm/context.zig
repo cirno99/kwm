@@ -801,7 +801,11 @@ pub fn prepare_remove_seat(self: *Self, seat: *Seat) void {
 pub fn switch_mode(self: *Self, mode: []const u8) void {
     log.debug("switch mode from {s} to {s}", .{ self.mode, mode });
 
-    self.mode = fmt.bufPrint(&mode_buffer, "{s}", .{ mode }) catch @panic("mode name too lone");
+    if (mode.len >= mode_buffer.len) {
+        log.err("mode name too long: '{s}', keeping current mode", .{ mode });
+        return;
+    }
+    self.mode = fmt.bufPrint(&mode_buffer, "{s}", .{ mode }) catch unreachable;
 
     if (comptime build_options.bar_enabled) {
         var it = self.outputs.safeIterator(.forward);

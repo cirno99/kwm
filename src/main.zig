@@ -15,6 +15,7 @@ const river = wayland.client.river;
 const kwm = @import("kwm");
 const flags = @import("flags");
 const Config = @import("config");
+const crash = @import("kwm/crash.zig");
 
 const usage =
     \\usage: kwm [options]
@@ -39,6 +40,8 @@ const Globals = struct {
 
 
 pub fn main(init: process.Init) !void {
+    crash.init();
+
     const args = try init.minimal.args.toSlice(init.arena.allocator());
 
     const options = flags.parser(
@@ -154,6 +157,11 @@ fn registry_listener(registry: *wl.Registry, event: wl.Registry.Event, globals: 
     }
 }
 
+
+pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
+    crash.log_panic(msg);
+    @trap();
+}
 
 fn print(io: Io, dest: enum { stdout, stderr }, bytes: []const u8) !void {
     var buffer: [1024]u8 = undefined;
