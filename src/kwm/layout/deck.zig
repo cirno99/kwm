@@ -25,9 +25,9 @@ master_location: MasterLocation,
 pub fn arrange(self: *const Self, output: *Output) !void {
     log.debug("<{*}> arrange windows in output {*}", .{ self, output });
 
-    var windows = blk: {
-        var windows: std.ArrayList(*Window) = .empty;
-        errdefer windows.deinit(ctx.gpa);
+    var windows_buf: [256]*Window = undefined;
+    const windows = blk: {
+        var windows: std.ArrayList(*Window) = .initBuffer(&windows_buf);
 
         {
             var it = ctx.windows.safeIterator(.forward);
@@ -49,7 +49,6 @@ pub fn arrange(self: *const Self, output: *Output) !void {
         }
         break :blk windows;
     };
-    defer windows.deinit(ctx.gpa);
 
     if (windows.items.len == 0) return;
 

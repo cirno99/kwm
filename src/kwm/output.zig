@@ -52,6 +52,7 @@ x: i32 = undefined,
 y: i32 = undefined,
 width: i32 = undefined,
 height: i32 = undefined,
+fullscreen_cached: ?*Window = null,
 
 background: if (build_options.background_enabled) @import("background.zig") else void = undefined,
 bar: if (build_options.bar_enabled) @import("bar.zig") else void = undefined,
@@ -183,20 +184,15 @@ pub inline fn exclusive_height(self: *Self) i32 {
 
 
 pub fn fullscreen_window(self: *Self) ?*Window {
-    {
-        var it = ctx.windows.safeIterator(.forward);
-        while (it.next()) |window| {
-            if (!window.is_visible_in(self)) continue;
-
-            switch (window.fullscreen) {
-                .output => |output| {
-                    if (output == self) {
-                        return window;
-                    }
-                },
-                else => {}
-            }
+    if (self.fullscreen_cached) |window| {
+        if (
+            window.fullscreen == .output
+            and window.fullscreen.output == self
+            and window.is_visible_in(self)
+        ) {
+            return window;
         }
+        self.fullscreen_cached = null;
     }
 
     return null;

@@ -27,7 +27,7 @@ const ShellSurface = @import("shell_surface.zig");
 
 const ctx = Context.get();
 const color_pattern = mvzr.compile("\\^#([0-9a-zA-Z]{8}|!)").?;
-pub var status_buffer = [1]u8{0} ** 256;
+pub var status_buffer = [1]u8{0} ** 257;
 
 font: render_.Font = undefined,
 
@@ -53,6 +53,11 @@ button_xs: std.ArrayList(i32) = .empty,
 button_widths: std.ArrayList(i32) = .empty,
 minimized_items: [32]struct { x: i32, window: *Window } = undefined,
 minimized_items_len: usize = 0,
+
+tag_texts: std.ArrayList(*const fcft.TextRun) = .empty,
+tag_texts_valid: bool = false,
+button_texts: std.ArrayList(struct { *const fcft.TextRun, i32 }) = .empty,
+button_texts_valid: bool = false,
 
 pub fn init(self: *Self, output: *Output) !void {
     log.debug("<{*}> init", .{self});
@@ -82,6 +87,9 @@ pub fn deinit(self: *Self) void {
         self.hidden = true;
         self.hide();
     }
+    self.clear_text_runs();
+    self.tag_texts.deinit(ctx.gpa);
+    self.button_texts.deinit(ctx.gpa);
     self.font.deinit();
 
     self.static_splits.deinit(ctx.gpa);
@@ -89,9 +97,20 @@ pub fn deinit(self: *Self) void {
     self.button_widths.deinit(ctx.gpa);
 }
 
+fn clear_text_runs(self: *Self) void {
+    for (self.tag_texts.items) |text| text.destroy();
+    self.tag_texts.clearRetainingCapacity();
+    self.tag_texts_valid = false;
+
+    for (self.button_texts.items) |d| d[0].destroy();
+    self.button_texts.clearRetainingCapacity();
+    self.button_texts_valid = false;
+}
+
 pub inline fn reload_font(self: *Self) void {
     log.debug("<{*}> reload font", .{self});
 
+    self.clear_text_runs();
     self.font.reload(ctx.cfg.bar.font, self.scale);
 }
 
@@ -369,37 +388,39 @@ fn render_static_component(self: *Self) void {
         return;
     };
 
+    if (!self.tag_texts_valid) build_tags: {
+        for (self.tag_texts.items) |text| text.destroy();
+        self.tag_texts.clearRetainingCapacity();
+        self.tag_texts.ensureTotalCapacity(ctx.gpa, area.tags.len) catch |err| {
+            log.err("<{*}> ensure tag_texts total capacity to {} failed: {}", .{ self, area.tags.len, err });
+            break :build_tags;
+        };
+        for (area.tags) |label| {
+            const utf8 = render_.utils.to_utf8(ctx.gpa, label) catch |err| {
+                log.warn("<{*}> to_utf8 failed: {}", .{ self, err });
+                break :build_tags;
+            };
+            defer ctx.gpa.free(utf8);
+
+            const text = self.font.rasterize_text_run(utf8) orelse break :build_tags;
+            self.tag_texts.append(ctx.gpa, text) catch |err| {
+                log.warn("<{*}> append tag text failed: {}", .{ self, err });
+                text.destroy();
+                break :build_tags;
+            };
+        }
+        self.tag_texts_valid = true;
+    }
+    if (!self.tag_texts_valid) return;
+
     self.static_splits.ensureTotalCapacity(ctx.gpa, area.tags.len) catch |err| {
         log.err("<{*}> ensure static_splits total capacity to {} failed: {}", .{ self, area.tags.len, err });
         return;
     };
 
-    var texts: std.ArrayList(*const fcft.TextRun) = .empty;
-    texts.ensureTotalCapacity(ctx.gpa, area.tags.len) catch |err| {
-        log.err("<{*}> initCapacity for texts while render_static_component failed: {}", .{ self, err });
-        return;
-    };
-    defer texts.deinit(ctx.gpa);
-
-    for (area.tags) |label| {
-        const utf8 = render_.utils.to_utf8(ctx.gpa, label) catch |err| {
-            log.warn("<{*}> to_utf8 failed: {}", .{ self, err });
-            return;
-        };
-        defer ctx.gpa.free(utf8);
-
-        texts.appendBounded(self.font.rasterize_text_run(utf8) orelse return) catch unreachable;
-    }
-
-    defer {
-        for (texts.items) |text| {
-            text.destroy();
-        }
-    }
-
     const pad = self.get_pad();
     var total_tag_width: i32 = 0;
-    for (texts.items) |text| {
+    for (self.tag_texts.items) |text| {
         const tw = @as(i32, @intCast(render_.utils.text_width(text))) + @as(i32, pad);
         if (tw <= 0) continue;
         total_tag_width += tw;
@@ -428,7 +449,7 @@ fn render_static_component(self: *Self) void {
 
     var x: i32 = 0;
     const y: i16 = 0;
-    for (0.., texts.items) |i, text| {
+    for (0.., self.tag_texts.items) |i, text| {
         const tag: u32 = @as(u32, @intCast(1)) << @as(u5, @intCast(i));
 
         const is_focused = self.output.tag & tag != 0;
@@ -684,28 +705,31 @@ fn render_dynamic_component(self: *Self) void {
     self.button_xs.clearRetainingCapacity();
     self.button_widths.clearRetainingCapacity();
 
-    // measurement pass
-    var btn_datas: std.ArrayList(struct { *const fcft.TextRun, i32 }) = .empty;
-    defer {
-        for (btn_datas.items) |d| d[0].destroy();
-        btn_datas.deinit(ctx.gpa);
-    }
-
-    if (ctx.cfg.bar.buttons) |buttons_cfg| {
-        for (buttons_cfg.buttons) |button| {
-            const utf8 = render_.utils.to_utf8(ctx.gpa, button.label) catch break;
-            defer ctx.gpa.free(utf8);
-            const text = self.font.rasterize_text_run(utf8) orelse break;
-            const tw = render_.utils.text_width(text);
-            btn_datas.append(ctx.gpa, .{ text, @as(i32, @intCast(tw)) + pad }) catch |err| {
-                log.warn("append button datas failed: {}", .{err});
-                break;
+    if (ctx.cfg.bar.buttons) |buttons_cfg| build_buttons: {
+        if (!self.button_texts_valid) {
+            for (self.button_texts.items) |d| d[0].destroy();
+            self.button_texts.clearRetainingCapacity();
+            self.button_texts.ensureTotalCapacity(ctx.gpa, buttons_cfg.buttons.len) catch |err| {
+                log.warn("ensure button texts capacity failed: {}", .{err});
+                break :build_buttons;
             };
+            for (buttons_cfg.buttons) |button| {
+                const utf8 = render_.utils.to_utf8(ctx.gpa, button.label) catch break :build_buttons;
+                defer ctx.gpa.free(utf8);
+                const text = self.font.rasterize_text_run(utf8) orelse break :build_buttons;
+                const tw = render_.utils.text_width(text);
+                self.button_texts.append(ctx.gpa, .{ text, @as(i32, @intCast(tw)) + pad }) catch |err| {
+                    log.warn("append button datas failed: {}", .{err});
+                    text.destroy();
+                    break :build_buttons;
+                };
+            }
+            self.button_texts_valid = true;
         }
     }
 
     var total_button_width: i32 = 0;
-    for (btn_datas.items) |d| total_button_width += d[1];
+    for (self.button_texts.items) |d| total_button_width += d[1];
 
     var status_datas: std.ArrayList(struct { pixman.Color, *const fcft.TextRun }) = .empty;
     defer {
@@ -771,7 +795,7 @@ fn render_dynamic_component(self: *Self) void {
         const btn_bg = render_.utils.color(btn_scheme.bg);
 
         var bx = right_block_x;
-        for (btn_datas.items) |d| {
+        for (self.button_texts.items) |d| {
             const text = d[0];
             const btn_w: i16 = @intCast(@min(d[1], @as(i32, std.math.maxInt(i16))));
 

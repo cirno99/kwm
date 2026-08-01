@@ -13,6 +13,7 @@ const river = wayland.client.river;
 const kwm = @import("kwm");
 
 const rule = @import("config/rule.zig");
+const pattern = @import("config/rule/pattern.zig");
 const constants = @import("config/constants.zig");
 const preprocess = @import("config/preprocess.zig");
 pub const meta = @import("config/meta.zig");
@@ -150,6 +151,8 @@ pub fn reload(
     var new = try load(.{ .gpa = ctx.gpa, .io = ctx.io, .env = ctx.env }, path);
     defer free(ctx.gpa, new);
 
+    pattern.clear_cache();
+
     var mask: meta.field_mask(Config) = .{};
 
     const struct_info = @typeInfo(Config).@"struct";
@@ -176,6 +179,8 @@ pub fn reload(
 
 pub fn free(gpa: mem.Allocator, config: Config) void {
     log.debug("free configuration", .{});
+
+    pattern.clear_cache();
 
     meta.zon_free(
         gpa,

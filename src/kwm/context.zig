@@ -69,6 +69,8 @@ minimized_order_len: usize = 0,
 key_repeat: ?KeyRepeat,
 
 bar_status_fd: ?posix.fd_t = null,
+last_status: [256]u8 = undefined,
+last_status_len: usize = 0,
 
 terminal_windows: std.AutoHashMap(i32, *Window) = undefined,
 output_states: std.StringHashMap(*Output.State) = undefined,
@@ -381,7 +383,7 @@ pub fn update_bar_status(self: *Self) void {
             log.debug("update status", .{});
 
             const dest_buf = &@import("bar.zig").status_buffer;
-            const nbytes = posix.read(fd, dest_buf) catch |err| {
+            const nbytes = posix.read(fd, dest_buf[0 .. dest_buf.len - 1]) catch |err| {
                 switch (err) {
                     error.WouldBlock => log.debug("no data in fd {}", .{ fd }),
                     else => log.err("read data from fd {} failed: {}", .{ fd, err }),
@@ -392,9 +394,12 @@ pub fn update_bar_status(self: *Self) void {
             log.debug("read {} bytes data from fd {}", .{ nbytes, fd });
 
             if (nbytes > 0) {
-                if (nbytes < dest_buf.len) {
-                    dest_buf[nbytes] = 0;
-                }
+                const n = @min(nbytes, dest_buf.len - 1);
+                dest_buf[n] = 0;
+
+                if (n == self.last_status_len and mem.eql(u8, self.last_status[0..n], dest_buf[0..n])) return;
+                self.last_status_len = n;
+                @memcpy(self.last_status[0..n], dest_buf[0..n]);
 
                 var show_bar_num: u8 = 0;
                 var it = self.outputs.safeIterator(.forward);
@@ -783,7 +788,11 @@ pub fn prepare_remove_output(self: *Self, output: *Output) void {
                 window.set_output(new_output, false);
             }
             switch (window.fullscreen) {
-                .output => |o| if (o == output) window.prepare_unfullscreen(),
+                .output => |o| if (o == output) {
+                    output.fullscreen_cached = null;
+                    window.fullscreen = .none;
+                    window.prepare_unfullscreen();
+                },
                 else => {}
             }
         }
@@ -1185,7 +1194,9 @@ fn prepare_render_windows(self: *Self) void {
 
     if (focused) |window| {
         // move focus to head of focus_stack
-        if (!window.sticky) self.focus(window, false);
+        if (!window.sticky and self.focus_stack.link.next.? != &window.flink) {
+            self.focus(window, false);
+        }
     }
 }
 

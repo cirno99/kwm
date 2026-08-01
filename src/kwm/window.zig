@@ -100,6 +100,16 @@ parent: ?*Self = null,
 decoration: ?Decoration = null,
 decoration_hint: river.WindowV1.DecorationHint = .no_preference,
 
+last_border: struct {
+    width: i32,
+    rgb: u32,
+} = .{ .width = -1, .rgb = 0 },
+last_render_pos: struct {
+    x: i32,
+    y: i32,
+} = .{ .x = std.math.minInt(i32), .y = std.math.minInt(i32) },
+last_visible: bool = false,
+
 is_terminal: bool = false,
 swallowing: ?*Self = null,
 swallowed_by: ?*Self = null,
@@ -195,6 +205,13 @@ pub fn destroy(self: *Self) void {
 
     ctx.remove_minimized(self);
 
+    switch (self.fullscreen) {
+        .output => |output| {
+            if (output.fullscreen_cached == self) output.fullscreen_cached = null;
+        },
+        else => {}
+    }
+
     self.set_former_output(null);
 
     if (self.is_terminal) {
@@ -259,7 +276,7 @@ pub fn set_former_output(self: *Self, output: ?[]const u8) void {
 
 
 pub fn set_tag(self: *Self, tag: u32) void {
-    if (tag == 0) return;
+    if (tag == 0 or self.tag == tag) return;
 
     log.debug("<{*}> set tag: {b}", .{ self, tag });
 
@@ -395,6 +412,9 @@ pub fn prepare_unfullscreen(self: *Self) void {
 
 
 pub fn set_border(self: *Self, width: i32, rgb: u32) void {
+    if (self.last_border.width == width and self.last_border.rgb == rgb) return;
+    self.last_border = .{ .width = width, .rgb = rgb };
+
     log.debug("<{*}> set border: (width: {}, color: 0x{x})", .{ self, width, rgb });
 
     const color = utils.rgba(rgb);
@@ -595,6 +615,10 @@ pub fn handle_events(self: *Self) void {
             .fullscreen => |data| {
                 log.debug("<{*}> managing fullscreen: {*}", .{ self, data });
 
+                const original_fullscreen_output = switch (self.fullscreen) {
+                    .output => |o| o,
+                    else => null,
+                };
                 var fullscreen_output: ?*Output = null;
 
                 switch (self.fullscreen) {
@@ -629,7 +653,11 @@ pub fn handle_events(self: *Self) void {
                     log.debug("<{*}> fullscreen on {*}", .{ self, output });
 
                     self.rwm_window.fullscreen(output.rwm_output);
+                    if (original_fullscreen_output) |o| {
+                        if (o != output) o.fullscreen_cached = null;
+                    }
                     self.fullscreen = .{ .output = output };
+                    output.fullscreen_cached = self;
                 }
             },
             .unfullscreen => {
@@ -642,7 +670,8 @@ pub fn handle_events(self: *Self) void {
                     .window => {
                         self.rwm_window.informNotFullscreen();
                     },
-                    .output => {
+                    .output => |output| {
+                        if (output.fullscreen_cached == self) output.fullscreen_cached = null;
                         self.rwm_window.informNotFullscreen();
                         self.rwm_window.exitFullscreen();
                     }
@@ -793,7 +822,10 @@ pub fn render(self: *Self) void {
             log.debug("<{*}> geometry undefined, hidden", .{ self });
         if (self.output == null)
             log.debug("<{*}> has no output, hide", .{ self });
-        self.rwm_window.hide();
+        if (self.last_visible) {
+            self.rwm_window.hide();
+            self.last_visible = false;
+        }
         return;
     }
 
@@ -814,17 +846,27 @@ pub fn render(self: *Self) void {
         log.debug("<{*}> rendering maximize", .{ self });
         offset_x += ctx.cfg.border.width;
         offset_y += ctx.cfg.border.width;
-        self.rwm_window_node.setPosition(output_x + offset_x, output_y + offset_y);
-        self.rwm_window.show();
+        const px = output_x + offset_x;
+        const py = output_y + offset_y;
+        if (self.last_render_pos.x != px or self.last_render_pos.y != py) {
+            self.rwm_window_node.setPosition(px, py);
+            self.last_render_pos = .{ .x = px, .y = py };
+        }
+        if (!self.last_visible) {
+            self.rwm_window.show();
+            self.last_visible = true;
+        }
         return;
     }
 
     log.debug("<{*}> rendering to (x: {}, y: {})", .{ self, self.x, self.y });
 
-    self.rwm_window_node.setPosition(
-        output_x + self.x + offset_x,
-        output_y + self.y + offset_y
-    );
+    const px = output_x + self.x + offset_x;
+    const py = output_y + self.y + offset_y;
+    if (self.last_render_pos.x != px or self.last_render_pos.y != py) {
+        self.rwm_window_node.setPosition(px, py);
+        self.last_render_pos = .{ .x = px, .y = py };
+    }
 
     var left = self.x - ctx.cfg.border.width;
     var right = self.x + self.width + ctx.cfg.border.width;
@@ -847,7 +889,10 @@ pub fn render(self: *Self) void {
         self.clip_state = .normal;
     }
 
-    self.rwm_window.show();
+    if (!self.last_visible) {
+        self.rwm_window.show();
+        self.last_visible = true;
+    }
 }
 
 
@@ -1037,6 +1082,10 @@ fn rwm_window_listener(rwm_window: *river.WindowV1, event: river.WindowV1.Event,
             log.debug("<{*}> title: {s}", .{ window, title });
 
             window.set_title(mem.span(title));
+
+            if (comptime build_options.bar_enabled) {
+                if (window.output) |output| output.bar.damage(.title);
+            }
         },
         .closed => {
             log.debug("<{*}> closed", .{ window });

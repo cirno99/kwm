@@ -17,6 +17,9 @@ wl_surface: *wl.Surface,
 wl_subsurface: *wl.Subsurface,
 wp_viewport: *wp.Viewport,
 
+cached_color: ?u32 = null,
+cached_buffer: ?*wl.Buffer = null,
+
 
 pub fn init(self: *Self, parent: *wl.Surface) !void {
     const wl_surface = try ctx.wl_compositor.createSurface();
@@ -38,6 +41,7 @@ pub fn init(self: *Self, parent: *wl.Surface) !void {
 pub fn deinit(self: *Self) void {
     log.debug("<{*}> deinit", .{ self });
 
+    if (self.cached_buffer) |buffer| buffer.destroy();
     self.wp_viewport.destroy();
     self.wl_subsurface.destroy();
     self.wl_surface.destroy();
@@ -46,17 +50,24 @@ pub fn deinit(self: *Self) void {
 pub fn render(self: *Self, x: i32, y: i32, width: i32, height: i32, color: u32) void {
     log.debug("<{*}> rendering", .{ self });
 
-    const rgba = utils.rgba(color);
-    const wl_buffer = ctx.wp_single_pixel_buffer_manager.createU32RgbaBuffer(
-        rgba.r,
-        rgba.g,
-        rgba.b,
-        rgba.a,
-    ) catch |err| {
-        log.err("<{*}> create buffer failed: {}", .{ self, err });
-        return;
-    };
-    defer wl_buffer.destroy();
+    if (self.cached_color != color) {
+        if (self.cached_buffer) |buffer| buffer.destroy();
+        self.cached_buffer = null;
+        self.cached_color = null;
+
+        const rgba = utils.rgba(color);
+        self.cached_buffer = ctx.wp_single_pixel_buffer_manager.createU32RgbaBuffer(
+            rgba.r,
+            rgba.g,
+            rgba.b,
+            rgba.a,
+        ) catch |err| {
+            log.err("<{*}> create buffer failed: {}", .{ self, err });
+            return;
+        };
+        self.cached_color = color;
+    }
+    const wl_buffer = self.cached_buffer.?;
 
     self.wl_subsurface.setPosition(x, y);
     self.wl_surface.attach(wl_buffer, 0, 0);
