@@ -69,8 +69,6 @@ pub fn init(self: *Self, output: *Output) !void {
     errdefer self.font.deinit();
 
     self.dynamic_splits = .initBuffer(&self.dynamic_splits_buffer);
-    self.button_xs = .empty;
-    self.button_widths = .empty;
 
     if (!self.hidden) {
         try self.show();
@@ -105,6 +103,14 @@ pub inline fn height(self: *const Self, logical: bool) i32 {
     ) else self.font.height();
 }
 
+pub inline fn pointer_in_bar(self: *const Self, pointer_x: i32, pointer_y: i32) bool {
+    if (pointer_x < self.output.x or pointer_x > self.output.x + self.output.width) return false;
+    return switch (ctx.cfg.bar.position) {
+        .top => pointer_y >= self.output.y and pointer_y <= self.output.y + self.height(true),
+        .bottom => pointer_y >= self.output.y + self.output.height - self.height(true) and pointer_y <= self.output.y + self.output.height,
+    };
+}
+
 pub fn handle_click(self: *Self, seat: *Seat) void {
     log.debug("<{*}> handle click by {*}", .{ self, seat });
 
@@ -112,21 +118,7 @@ pub fn handle_click(self: *Self, seat: *Seat) void {
     const pointer_y = seat.pointer_position.y;
 
     // ensure in range
-    if (pointer_x < self.output.x or pointer_x > self.output.x + self.output.width) {
-        return;
-    }
-    switch (ctx.cfg.bar.position) {
-        .top => {
-            if (pointer_y < self.output.y or pointer_y > self.output.y + self.height(true)) {
-                return;
-            }
-        },
-        .bottom => {
-            if (pointer_y < self.output.y + self.output.height - self.height(true) or pointer_y > self.output.y + self.output.height) {
-                return;
-            }
-        },
-    }
+    if (!self.pointer_in_bar(pointer_x, pointer_y)) return;
 
     var action: ?binding.Action = null;
     defer if (action) |a| {
@@ -206,21 +198,10 @@ pub fn handle_click(self: *Self, seat: *Seat) void {
 pub fn handle_axis(self: *Self, seat: *Seat, discrete: i32) void {
     if (self.hidden) return;
 
-    const pointer_x = seat.pointer_position.x;
-    const pointer_y = seat.pointer_position.y;
-
-    if (pointer_x < self.output.x or pointer_x > self.output.x + self.output.width) return;
-    switch (ctx.cfg.bar.position) {
-        .top => {
-            if (pointer_y < self.output.y or pointer_y > self.output.y + self.height(true)) return;
-        },
-        .bottom => {
-            if (pointer_y < self.output.y + self.output.height - self.height(true) or pointer_y > self.output.y + self.output.height) return;
-        },
-    }
+    if (!self.pointer_in_bar(seat.pointer_position.x, seat.pointer_position.y)) return;
 
     const buttons_cfg = ctx.cfg.bar.buttons orelse return;
-    var x = utils.logical2physics(i32, pointer_x - self.output.x, self.scale);
+    var x = utils.logical2physics(i32, seat.pointer_position.x - self.output.x, self.scale);
     x -= self.static_component_width();
 
     for (buttons_cfg.buttons, 0..) |button, i| {
@@ -453,7 +434,10 @@ fn render_static_component(self: *Self) void {
         const is_focused = self.output.tag & tag != 0;
 
         const tw = @as(i32, @intCast(render_.utils.text_width(text))) + @as(i32, pad);
-        if (tw <= 0) { x += tw; continue; }
+        if (tw <= 0) {
+            x += tw;
+            continue;
+        }
         defer x += tw;
 
         if (is_focused) {
@@ -604,30 +588,28 @@ fn render_dynamic_component(self: *Self) void {
         ) + @as(i16, @intCast(pad));
 
         self.minimized_items_len = 0;
-        {
-            var it = ctx.windows.safeIterator(.forward);
-            while (it.next()) |window| {
-                if (window.output == self.output and window.minimized and
-                    (window.sticky or (window.tag & self.output.tag) != 0))
-                {
-                    if (self.minimized_items_len >= self.minimized_items.len) break;
-                    self.minimized_items[self.minimized_items_len] = .{ .x = x, .window = window };
-                    self.minimized_items_len += 1;
+        var it = ctx.windows.safeIterator(.forward);
+        while (it.next()) |window| {
+            if (window.output == self.output and window.minimized and
+                (window.sticky or (window.tag & self.output.tag) != 0))
+            {
+                if (self.minimized_items_len >= self.minimized_items.len) break;
+                self.minimized_items[self.minimized_items_len] = .{ .x = x, .window = window };
+                self.minimized_items_len += 1;
 
-                    var buf: [8]u8 = undefined;
-                    const label = if (window.title) |t|
-                        if (t.len > 4) t[0..4] else t
-                    else
-                        "???";
-                    const min_text = fmt.bufPrint(&buf, "[{s}]", .{label}) catch break :draw_layout;
-                    x += self.font.render_str(
-                        buffer,
-                        min_text,
-                        &fg,
-                        x + @as(i16, @intCast(@divFloor(pad, 2))),
-                        y,
-                    ) + @as(i16, @intCast(pad));
-                }
+                var buf: [8]u8 = undefined;
+                const label = if (window.title) |t|
+                    if (t.len > 4) t[0..4] else t
+                else
+                    "???";
+                const min_text = fmt.bufPrint(&buf, "[{s}]", .{label}) catch continue;
+                x += self.font.render_str(
+                    buffer,
+                    min_text,
+                    &fg,
+                    x + @as(i16, @intCast(@divFloor(pad, 2))),
+                    y,
+                ) + @as(i16, @intCast(pad));
             }
         }
     }
@@ -716,7 +698,7 @@ fn render_dynamic_component(self: *Self) void {
             const text = self.font.rasterize_text_run(utf8) orelse break;
             const tw = render_.utils.text_width(text);
             btn_datas.append(ctx.gpa, .{ text, @as(i32, @intCast(tw)) + pad }) catch |err| {
-                log.warn("append button datas failed: {}", .{ err });
+                log.warn("append button datas failed: {}", .{err});
                 break;
             };
         }
@@ -752,25 +734,23 @@ fn render_dynamic_component(self: *Self) void {
         while (i < status_raw.len) {
             if (match == null or i < match.?.start) {
                 const end = if (match) |m| m.start else status_raw.len;
-                defer i = end;
                 const utf8 = render_.utils.to_utf8(ctx.gpa, status_raw[i..end]) catch break;
                 defer ctx.gpa.free(utf8);
                 const text = self.font.rasterize_text_run(utf8) orelse break;
                 status_datas.append(ctx.gpa, .{ cc, text }) catch |err| {
-                    log.warn("append status datas failed: {}", .{ err });
+                    log.warn("append status datas failed: {}", .{err});
                     break;
                 };
+                i = end;
             } else if (i == match.?.start) {
-                defer {
-                    i += match.?.slice.len;
-                    match = it.next();
-                }
                 if (match.?.slice.len == 3) {
                     cc = sf;
                 } else {
                     const hex = match.?.slice[2..];
                     cc = render_.utils.color(fmt.parseInt(u32, hex, 16) catch break);
                 }
+                i += match.?.slice.len;
+                match = it.next();
             } else unreachable;
         }
     }
@@ -796,11 +776,11 @@ fn render_dynamic_component(self: *Self) void {
             const btn_w: i16 = @intCast(@min(d[1], @as(i32, std.math.maxInt(i16))));
 
             self.button_xs.append(ctx.gpa, bx) catch |err| {
-                log.warn("append button xs failed: {}", .{ err });
+                log.warn("append button xs failed: {}", .{err});
                 break;
             };
             self.button_widths.append(ctx.gpa, btn_w) catch |err| {
-                log.warn("append button widths failed: {}", .{ err });
+                log.warn("append button widths failed: {}", .{err});
                 break;
             };
 

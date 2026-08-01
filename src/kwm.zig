@@ -88,10 +88,8 @@ pub fn run(wl_display: *wl.Display) !void {
                 switch (fd_type) {
                     .wayland => {
                         if (wl_display.dispatch() != .SUCCESS) return error.DispatchFailed;
-                        {
-                            var it = ctx.seats.safeIterator(.forward);
-                            while (it.next()) |seat| seat.handle_actions();
-                        }
+                        var it = ctx.seats.safeIterator(.forward);
+                        while (it.next()) |seat| seat.handle_actions();
                     },
                     .signal => {
                         const signal_info = try read(posix.siginfo_t, poll_fd.fd) orelse continue;

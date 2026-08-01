@@ -608,14 +608,15 @@ pub fn push_minimized(self: *Self, window: *Window) void {
 }
 
 pub fn remove_minimized(self: *Self, window: *Window) void {
-    for (self.minimized_order[0..self.minimized_order_len], 0..) |w, i| {
+    const order = self.minimized_order[0..self.minimized_order_len];
+    for (order, 0..) |w, i| {
         if (w == window) {
             const last = self.minimized_order_len - 1;
             if (i < last) {
-                @memmove(self.minimized_order[i..last], self.minimized_order[i + 1 .. last + 1]);
+                @memmove(order[i..last], order[i + 1 .. last + 1]);
             }
-            self.minimized_order[self.minimized_order_len - 1] = null;
-            self.minimized_order_len -= 1;
+            order[last] = null;
+            self.minimized_order_len = last;
             break;
         }
     }
@@ -677,6 +678,7 @@ pub fn output_at_position(self: *Self, abs_x: i32, abs_y: i32) ?*Output {
     }
     return null;
 }
+
 
 pub inline fn focus_exclusive(self: *Self) bool {
     return if (self.current_seat) |seat| seat.focus_exclusive else false;

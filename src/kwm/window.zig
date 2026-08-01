@@ -297,16 +297,13 @@ pub fn place(self: *Self, pos: types.PlacePosition) void {
 pub fn move(self: *Self, x: ?i32, y: ?i32) void {
     defer log.debug("<{*}> move to (x: {}, y: {})", .{ self, self.x, self.y });
 
-    if (x) |new_x| self.x = new_x;
-    if (y) |new_y| self.y = new_y;
+    self.x = x orelse self.x;
+    self.y = y orelse self.y;
 }
 
 
 pub fn unbound_move(self: *Self, x: ?i32, y: ?i32) void {
-    defer log.debug("<{*}> unbound move to (x: {}, y: {})", .{ self, self.x, self.y });
-
-    if (x) |new_x| self.x = new_x;
-    if (y) |new_y| self.y = new_y;
+    self.move(x, y);
 }
 
 
@@ -329,28 +326,21 @@ pub fn snap_to(
 
 
 pub fn resize(self: *Self, width: ?i32, height: ?i32) void {
-    defer log.debug(
-        "<{*}> set dimensions to (width: {}, height: {})",
-        .{ self, self.width, self.height },
+    self.unbound_resize(
+        if (width) |new_width| @max(new_width, self.min_width) else null,
+        if (height) |new_height| @max(new_height, self.min_height) else null,
     );
-
-    if (width) |new_width| self.width = @max(new_width, self.min_width);
-    if (height) |new_height| self.height = @max(new_height, self.min_height);
-
-    if (self.swallowing_border) |*border| {
-        border.damage();
-    }
 }
 
 
 pub fn unbound_resize(self: *Self, width: ?i32, height: ?i32) void {
     defer log.debug(
-        "<{*}> unbound set dimensions to (width: {}, height: {})",
+        "<{*}> set dimensions to (width: {}, height: {})",
         .{ self, self.width, self.height },
     );
 
-    if (width) |new_width| self.width = new_width;
-    if (height) |new_height| self.height = new_height;
+    self.width = width orelse self.width;
+    self.height = height orelse self.height;
 
     if (self.swallowing_border) |*border| {
         border.damage();
