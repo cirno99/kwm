@@ -28,13 +28,15 @@ fn get_regex(str: []const u8) ?mvzr.Regex {
     if (cache.get(str)) |pattern| return pattern;
 
     const pattern = mvzr.compile(str) orelse return null;
-    cache.put(str, pattern) catch {};
+    cache.put(str, pattern) catch |err| {
+        log.warn("cache regex `{s}` failed: {}", .{ str, err });
+    };
     return pattern;
 }
 
 pub fn is_match(self: *const Self, haystack: ?[]const u8) bool {
     if (haystack == null) {
-        log.debug("<{*}> matched null", .{ self });
+        log.debug("<{*}> matched null", .{self});
         return self.match_null;
     }
 

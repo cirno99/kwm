@@ -29,11 +29,9 @@ pub const PointerBindingEvent = binding.PointerBinding.Event;
 pub const WindowDecoration = Window.Decoration;
 pub const Button = types.Button;
 
-
 const ctx = Context.get();
 pub const init = Context.init;
 pub const deinit = Context.deinit;
-
 
 pub fn run(wl_display: *wl.Display) !void {
     Context.check_init();
@@ -80,10 +78,25 @@ pub fn run(wl_display: *wl.Display) !void {
             }
         }
 
-        _ = wl_display.flush();
+        switch (wl_display.flush()) {
+            .SUCCESS, .AGAIN => {},
+            else => |err| {
+                log.err("flush Wayland requests failed: {}", .{err});
+                return error.FlushFailed;
+            },
+        }
         _ = try posix.poll(poll_fds.items, -1);
 
         for (fd_types.items, poll_fds.items) |fd_type, poll_fd| {
+            const poll_error = poll_fd.revents & (posix.POLL.HUP | posix.POLL.ERR | posix.POLL.NVAL) != 0;
+            if (poll_error) switch (fd_type) {
+                .wayland => return error.WaylandConnectionClosed,
+                .signal, .key_repeat => return error.PollFdFailed,
+                .bar_status => {
+                    ctx.stop_listening_status();
+                    continue;
+                },
+            };
             if (poll_fd.revents & posix.POLL.IN != 0) {
                 switch (fd_type) {
                     .wayland => {
@@ -103,10 +116,8 @@ pub fn run(wl_display: *wl.Display) !void {
                 }
             }
         }
-
     }
 }
-
 
 fn read(comptime T: type, fd: posix.fd_t) !?T {
     var data: T = undefined;

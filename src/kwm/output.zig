@@ -31,7 +31,6 @@ pub const State = struct {
 
 const ctx = Context.get();
 
-
 link: wl.list.Link = undefined,
 
 wl_output: ?*wl.Output = null,
@@ -58,7 +57,6 @@ occupied_tags_cache: ?u32 = null,
 background: if (build_options.background_enabled) @import("background.zig") else void = undefined,
 bar: if (build_options.bar_enabled) @import("bar.zig") else void = undefined,
 
-
 pub fn create(
     rwm_output: *river.OutputV1,
     rwm_layer_shell_output: ?*river.LayerShellOutputV1,
@@ -66,23 +64,25 @@ pub fn create(
     const output = try ctx.gpa.create(Self);
     errdefer ctx.gpa.destroy(output);
 
-    defer log.debug("<{*}> created", .{ output });
+    defer log.debug("<{*}> created", .{output});
 
     output.* = .{
         .rwm_output = rwm_output,
         .rwm_layer_shell_output = rwm_layer_shell_output,
-        .layouts = .{ ctx.cfg.layout } ** 32,
-        .layout_tag = .{ ctx.cfg.default_layout } ** 32,
-        .prev_layout_tag = .{ ctx.cfg.default_layout } ** 32,
+        .layouts = .{ctx.cfg.layout} ** 32,
+        .layout_tag = .{ctx.cfg.default_layout} ** 32,
+        .prev_layout_tag = .{ctx.cfg.default_layout} ** 32,
     };
     output.link.init();
 
     if (comptime build_options.background_enabled) {
         try output.background.init(output);
+        errdefer output.background.deinit();
     }
 
     if (comptime build_options.bar_enabled) {
         try output.bar.init(output);
+        errdefer output.bar.deinit();
     }
 
     rwm_output.setListener(*Self, rwm_output_listener, output);
@@ -94,9 +94,8 @@ pub fn create(
     return output;
 }
 
-
 pub fn destroy(self: *Self) void {
-    defer log.debug("<{*}> destroyed", .{ self });
+    defer log.debug("<{*}> destroyed", .{self});
 
     {
         var it = ctx.seats.safeIterator(.forward);
@@ -105,7 +104,7 @@ pub fn destroy(self: *Self) void {
                 .output => |output| if (self == output) {
                     seat.previous_focused = .none;
                 },
-                else => {}
+                else => {},
             }
         }
     }
@@ -127,7 +126,6 @@ pub fn destroy(self: *Self) void {
     ctx.gpa.destroy(self);
 }
 
-
 pub fn get_state(self: *const Self) State {
     var state: State = undefined;
     inline for (@typeInfo(State).@"struct".fields) |field| {
@@ -136,16 +134,14 @@ pub fn get_state(self: *const Self) State {
     return state;
 }
 
-
 pub fn sync_state(self: *Self, state: *const State) void {
     inline for (@typeInfo(State).@"struct".fields) |field| {
         @field(self, field.name) = @field(state, field.name);
     }
 }
 
-
 pub fn apply_rules(self: *Self) void {
-    log.debug("<{*}> apply rules", .{ self });
+    log.debug("<{*}> apply rules", .{self});
 
     for (ctx.cfg.output_rules) |rule| {
         if (rule.match(self.name)) {
@@ -155,42 +151,31 @@ pub fn apply_rules(self: *Self) void {
     }
 }
 
-
 pub inline fn exclusive_x(self: *Self) i32 {
     return self.x;
 }
 
-
 pub inline fn exclusive_y(self: *Self) i32 {
-    return
-        if (comptime build_options.bar_enabled)
-            if (ctx.cfg.bar.position == .bottom or self.bar.hidden) self.y
-            else self.y + self.bar.height(true)
-        else self.y;
+    return if (comptime build_options.bar_enabled)
+        if (ctx.cfg.bar.position == .bottom or self.bar.hidden) self.y else self.y + self.bar.height(true)
+    else
+        self.y;
 }
-
 
 pub inline fn exclusive_width(self: *Self) i32 {
     return self.width;
 }
 
-
 pub inline fn exclusive_height(self: *Self) i32 {
-    return
-        if (comptime build_options.bar_enabled)
-            if (self.bar.hidden) self.height
-            else self.height - self.bar.height(true)
-        else self.height;
+    return if (comptime build_options.bar_enabled)
+        if (self.bar.hidden) self.height else self.height - self.bar.height(true)
+    else
+        self.height;
 }
-
 
 pub fn fullscreen_window(self: *Self) ?*Window {
     if (self.fullscreen_cached) |window| {
-        if (
-            window.fullscreen == .output
-            and window.fullscreen.output == self
-            and window.is_visible_in(self)
-        ) {
+        if (window.fullscreen == .output and window.fullscreen.output == self and window.is_visible_in(self)) {
             return window;
         }
         self.fullscreen_cached = null;
@@ -198,7 +183,6 @@ pub fn fullscreen_window(self: *Self) ?*Window {
 
     return null;
 }
-
 
 pub fn master_window(self: *Self) ?*Window {
     {
@@ -213,13 +197,11 @@ pub fn master_window(self: *Self) ?*Window {
     return null;
 }
 
-
 pub fn set_presentation(self: *Self, mode: river.OutputV1.PresentationMode) void {
     log.debug("<{*}> set presentation mode to {s}", .{ self, @tagName(mode) });
 
     self.rwm_output.setPresentationMode(mode);
 }
-
 
 pub fn set_tag(self: *Self, tag: u32) void {
     if (tag == 0 or self.tag == tag) return;
@@ -232,7 +214,7 @@ pub fn set_tag(self: *Self, tag: u32) void {
     self.tag = tag;
     if (self.main_tag & tag == 0) {
         // use the lowest bit 1 as new main tag
-        self.main_tag = tag ^ (tag & (tag-1));
+        self.main_tag = tag ^ (tag & (tag - 1));
 
         log.debug("<{*}> update main tag to {b}", .{ self, self.main_tag });
     }
@@ -240,17 +222,15 @@ pub fn set_tag(self: *Self, tag: u32) void {
     if (comptime build_options.bar_enabled) self.bar.damage(.tags);
 }
 
-
 pub fn switch_to_previous_tag(self: *Self) void {
     const prev_main_tag = self.prev_main_tag;
 
     self.set_tag(self.prev_tag);
-    log.debug("<{*}> switch to previous tag", .{ self });
+    log.debug("<{*}> switch to previous tag", .{self});
 
     self.main_tag = prev_main_tag;
-    log.debug("<{*}> switch to previous main tag", .{ self });
+    log.debug("<{*}> switch to previous main tag", .{self});
 }
-
 
 pub fn occupied_tags(self: *Self) u32 {
     if (self.occupied_tags_cache) |mask| return mask;
@@ -272,7 +252,6 @@ pub inline fn invalidate_occupied_tags(self: *Self) void {
     self.occupied_tags_cache = null;
 }
 
-
 pub fn toggle_tag(self: *Self, mask: u32) void {
     if (self.tag ^ mask == 0) return;
 
@@ -280,7 +259,7 @@ pub fn toggle_tag(self: *Self, mask: u32) void {
 
     self.tag ^= mask;
     // if there is only one bit 1, set it as new main tag
-    if (self.tag & (self.tag-1) == 0) {
+    if (self.tag & (self.tag - 1) == 0) {
         log.debug("<{*}> update main tag to {b}", .{ self, self.tag });
 
         self.main_tag = self.tag;
@@ -288,7 +267,6 @@ pub fn toggle_tag(self: *Self, mask: u32) void {
 
     if (comptime build_options.bar_enabled) self.bar.damage(.tags);
 }
-
 
 pub fn current_layout(self: *Self) union(Layout.Type) {
     tile: *Layout.Tile,
@@ -299,30 +277,24 @@ pub fn current_layout(self: *Self) union(Layout.Type) {
     centered_master: *Layout.CenteredMaster,
     float,
 } {
-    std.debug.assert(self.main_tag != 0 and self.main_tag & (self.main_tag-1) == 0);
+    std.debug.assert(self.main_tag != 0 and self.main_tag & (self.main_tag - 1) == 0);
 
     const i = @ctz(self.main_tag);
     return switch (self.layout_tag[i]) {
         .float => .float,
-        inline else => |t| @unionInit(
-            @TypeOf(self.current_layout()),
-            @tagName(t),
-            &@field(self.layouts[i], @tagName(t))
-        ),
+        inline else => |t| @unionInit(@TypeOf(self.current_layout()), @tagName(t), &@field(self.layouts[i], @tagName(t))),
     };
 }
 
-
 pub inline fn scroller_mfact(self: *const Self) f32 {
-    std.debug.assert(self.main_tag != 0 and self.main_tag & (self.main_tag-1) == 0);
+    std.debug.assert(self.main_tag != 0 and self.main_tag & (self.main_tag - 1) == 0);
 
     const i = @ctz(self.main_tag);
     return self.layouts[i].scroller.mfact;
 }
 
-
 pub fn set_current_layout(self: *Self, layout_t: Layout.Type) void {
-    std.debug.assert(self.main_tag != 0 and self.main_tag & (self.main_tag-1) == 0);
+    std.debug.assert(self.main_tag != 0 and self.main_tag & (self.main_tag - 1) == 0);
 
     const i = @ctz(self.main_tag);
     if (self.layout_tag[i] == layout_t) return;
@@ -335,14 +307,12 @@ pub fn set_current_layout(self: *Self, layout_t: Layout.Type) void {
     if (comptime build_options.bar_enabled) self.bar.damage(.layout);
 }
 
-
 pub fn switch_to_previous_layout(self: *Self) void {
     log.debug("<{*}> tag {b} switch to previous layout", .{ self, self.main_tag });
 
     const i = @ctz(self.main_tag);
     self.set_current_layout(self.prev_layout_tag[i]);
 }
-
 
 pub fn manage(self: *Self) void {
     switch (self.current_layout()) {
@@ -353,9 +323,8 @@ pub fn manage(self: *Self) void {
         },
     }
 
-    log.debug("<{*}> managed", .{ self });
+    log.debug("<{*}> managed", .{self});
 }
-
 
 fn apply_rule(self: *Self, rule: *const config.OutputRule) void {
     if (rule.presentation_mode) |mode| self.set_presentation(mode);
@@ -363,11 +332,10 @@ fn apply_rule(self: *Self, rule: *const config.OutputRule) void {
         l.* = config.meta.override(l.*, layout);
     };
     if (rule.default_layout) |default_layout| {
-        self.layout_tag = .{ default_layout } ** 32;
-        self.prev_layout_tag = .{ default_layout } ** 32;
+        self.layout_tag = .{default_layout} ** 32;
+        self.prev_layout_tag = .{default_layout} ** 32;
     }
 }
-
 
 fn set_name(self: *Self, name: ?[]const u8) void {
     if (self.name) |name_| {
@@ -379,7 +347,6 @@ fn set_name(self: *Self, name: ?[]const u8) void {
         self.name = ctx.gpa.dupe(u8, name_) catch null;
     }
 }
-
 
 fn rwm_output_listener(rwm_output: *river.OutputV1, event: river.OutputV1.Event, output: *Self) void {
     std.debug.assert(rwm_output == output.rwm_output);
@@ -420,7 +387,6 @@ fn rwm_output_listener(rwm_output: *river.OutputV1, event: river.OutputV1.Event,
     }
 }
 
-
 fn rwm_layer_shell_output_listener(
     rwm_layer_shell_output: *river.LayerShellOutputV1,
     event: river.LayerShellOutputV1.Event,
@@ -446,7 +412,6 @@ fn rwm_layer_shell_output_listener(
         },
     }
 }
-
 
 fn wl_output_listener(wl_output: *wl.Output, event: wl.Output.Event, output: *Self) void {
     std.debug.assert(wl_output == output.wl_output.?);
@@ -498,9 +463,9 @@ fn wl_output_listener(wl_output: *wl.Output, event: wl.Output.Event, output: *Se
             log.debug("<{*}> description: {s}", .{ output, data.description });
         },
         .done => {
-            log.debug("<{*}> done", .{ output });
+            log.debug("<{*}> done", .{output});
 
             output.apply_rules();
-        }
+        },
     }
 }

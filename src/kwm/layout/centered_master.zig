@@ -23,21 +23,17 @@ inner_gap: i32,
 outer_gap: i32,
 direction: Direction,
 
-
 pub fn arrange(self: *const Self, output: *Output) !void {
     log.debug("<{*}> arrange windows in output {*}", .{ self, output });
 
     const context = Context.get();
 
-    var windows: std.ArrayList(*Window) = .empty;
-    defer windows.deinit(ctx.gpa);
+    var windows = &ctx.layout_windows;
+    windows.clearRetainingCapacity();
     {
         var it = context.windows.safeIterator(.forward);
         while (it.next()) |window| {
-            if (
-                !window.is_visible_in(output)
-                or window.floating
-            ) continue;
+            if (!window.is_visible_in(output) or window.floating) continue;
             try windows.append(ctx.gpa, window);
         }
     }
@@ -45,8 +41,8 @@ pub fn arrange(self: *const Self, output: *Output) !void {
     if (windows.items.len == 0) return;
 
     const usable_width, const usable_height = blk: {
-        const width = @max(0, output.exclusive_width() - 2*self.outer_gap);
-        const height = @max(0, output.exclusive_height() - 2*self.outer_gap);
+        const width = @max(0, output.exclusive_width() - 2 * self.outer_gap);
+        const height = @max(0, output.exclusive_height() - 2 * self.outer_gap);
         break :blk switch (self.direction) {
             .horizontal => .{ width, height },
             .vertical => .{ height, width },
@@ -54,8 +50,8 @@ pub fn arrange(self: *const Self, output: *Output) !void {
     };
 
     const window_num: i32 = @intCast(windows.items.len);
-    const nmaster = @min(window_num, self.nmaster);
-    const nstack = window_num - self.nmaster;
+    const nmaster = @max(1, @min(window_num, self.nmaster));
+    const nstack = window_num - nmaster;
     const n_left_stack: i32 = if (nstack <= 0) 0 else if (nstack == 1) 1 else @divFloor(nstack, 2);
     const n_right_stack: i32 = if (nstack <= 0) 0 else nstack - n_left_stack;
 

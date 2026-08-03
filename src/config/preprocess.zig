@@ -7,6 +7,8 @@ const log = std.log.scoped(.preprocess);
 
 const mvzr = @import("mvzr");
 
+const max_include_size = 1024 * 1024;
+
 const State = union(enum) {
     normal,
     @"if",
@@ -17,15 +19,11 @@ const Target = struct {
     hostname: []const u8,
 };
 
-
-pub fn preprocess(
-    ctx: struct {
-        gpa: mem.Allocator,
-        io: Io,
-        env: *const process.Environ.Map,
-    },
-    path: []const u8
-) !std.ArrayList(u8) {
+pub fn preprocess(ctx: struct {
+    gpa: mem.Allocator,
+    io: Io,
+    env: *const process.Environ.Map,
+}, path: []const u8) !std.ArrayList(u8) {
     const cwd = Io.Dir.cwd();
     const file = try cwd.openFile(ctx.io, path, .{ .mode = .read_only });
     defer file.close(ctx.io);
@@ -119,7 +117,7 @@ pub fn preprocess(
         if (save) {
             if (include_pattern.isMatch(line)) {
                 const begin = mem.indexOf(u8, line, "(") orelse continue;
-                const contents = try dir.readFileAlloc(ctx.io, line[begin+1..line.len-2], ctx.gpa, .unlimited);
+                const contents = try dir.readFileAlloc(ctx.io, line[begin + 1 .. line.len - 2], ctx.gpa, .limited(max_include_size));
                 defer ctx.gpa.free(contents);
 
                 try result.appendSlice(ctx.gpa, contents);
@@ -131,16 +129,15 @@ pub fn preprocess(
     return result;
 }
 
-
 fn match(env: *const process.Environ.Map, line: []const u8, target: *const Target) !bool {
     var found_condition = false;
     inline for (@typeInfo(Target).@"struct".fields) |field_info| {
-        if (parse(line, field_info.name++"=")) |str| {
+        if (parse(line, field_info.name ++ "=")) |str| {
             found_condition = true;
 
             const pattern = mvzr.compile(str) orelse return error.CompileFailed;
 
-            log.debug(field_info.name++": try match {s} with {s}", .{ @field(target, field_info.name), str });
+            log.debug(field_info.name ++ ": try match {s} with {s}", .{ @field(target, field_info.name), str });
 
             if (!pattern.isMatch(@field(target, field_info.name))) return false;
         }
@@ -148,7 +145,7 @@ fn match(env: *const process.Environ.Map, line: []const u8, target: *const Targe
     if (parse(line, "env_contains:")) |str| {
         found_condition = true;
 
-        log.debug("finding environment variable {s}", .{ str });
+        log.debug("finding environment variable {s}", .{str});
         if (env.get(str) == null) return false;
     }
     if (parse(line, "env:")) |str| blk: {
@@ -165,7 +162,6 @@ fn match(env: *const process.Environ.Map, line: []const u8, target: *const Targe
     }
     return found_condition;
 }
-
 
 fn parse(line: []const u8, name: []const u8) ?[]const u8 {
     var i = mem.indexOf(u8, line, name) orelse return null;
