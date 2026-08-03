@@ -25,30 +25,35 @@ master_location: MasterLocation,
 pub fn arrange(self: *const Self, output: *Output) !void {
     log.debug("<{*}> arrange windows in output {*}", .{ self, output });
 
-    var windows_buf: [256]*Window = undefined;
-    const windows = blk: {
-        var windows: std.ArrayList(*Window) = .initBuffer(&windows_buf);
+    var windows: std.ArrayList(*Window) = .empty;
+    defer windows.deinit(ctx.gpa);
 
-        {
-            var it = ctx.windows.safeIterator(.forward);
-            while (windows.items.len < self.nmaster) {
-                const window = it.next() orelse break :blk windows;
-                if (!window.is_visible_in(output) or window.floating) continue;
-                try windows.append(ctx.gpa, window);
-            }
+    var masters_exhausted = false;
+    {
+        var it = ctx.windows.safeIterator(.forward);
+        while (windows.items.len < self.nmaster) {
+            const window = it.next() orelse {
+                // fewer visible windows than nmaster: all of them are masters,
+                // skip collecting stack windows
+                masters_exhausted = true;
+                break;
+            };
+            if (!window.is_visible_in(output) or window.floating) continue;
+            try windows.append(ctx.gpa, window);
         }
+    }
 
-        {
-            var it = ctx.focus_stack.safeIterator(.forward);
-            while (it.next()) |window| {
-                const masters = windows.items[0..@intCast(self.nmaster)];
-                if (mem.containsAtLeastScalar(*Window, masters, 1, window)) continue;
-                if (!window.is_visible_in(output) or window.floating) continue;
-                try windows.append(ctx.gpa, window);
-            }
+    if (!masters_exhausted) {
+        var it = ctx.focus_stack.safeIterator(.forward);
+        while (it.next()) |window| {
+            // guard against `self.nmaster` exceeding the number of collected
+            // master windows (e.g. fewer visible windows than nmaster)
+            const masters = windows.items[0..@min(@as(usize, @intCast(self.nmaster)), windows.items.len)];
+            if (mem.containsAtLeastScalar(*Window, masters, 1, window)) continue;
+            if (!window.is_visible_in(output) or window.floating) continue;
+            try windows.append(ctx.gpa, window);
         }
-        break :blk windows;
-    };
+    }
 
     if (windows.items.len == 0) return;
 

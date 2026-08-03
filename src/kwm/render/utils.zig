@@ -12,16 +12,17 @@ const ctx = Context.get();
 
 
 pub fn to_utf8(gpa: mem.Allocator, bytes: []const u8) ![]u32 {
-    const utf8 = try unicode.Utf8View.init(bytes);
-    var iter = utf8.iterator();
+    const view = try unicode.Utf8View.init(bytes);
 
-    var runes = try std.ArrayList(u32).initCapacity(gpa, bytes.len);
+    var count: usize = 0;
+    var iter = view.iterator();
+    while (iter.nextCodepoint()) |_| count += 1;
+
+    const runes = try gpa.alloc(u32, count);
     var i: usize = 0;
-    while (iter.nextCodepoint()) |rune| : (i += 1) {
-        runes.appendAssumeCapacity(rune);
-    }
-
-    return try runes.toOwnedSlice(gpa);
+    iter = view.iterator();
+    while (iter.nextCodepoint()) |rune| : (i += 1) runes[i] = rune;
+    return runes;
 }
 
 

@@ -27,7 +27,42 @@ const ShellSurface = @import("shell_surface.zig");
 
 const ctx = Context.get();
 const color_pattern = mvzr.compile("\\^#([0-9a-zA-Z]{8}|!)").?;
-pub var status_buffer = [1]u8{0} ** 257;
+pub var status_buffer = [1]u8{0} ** 4097;
+
+// Caches a rasterized text run for a given content, so that frequently
+// re-rendered (but seldom changing) bar texts don't get re-allocated and
+// re-shaped by fcft on every dynamic component render.
+const TextCache = struct {
+    bytes: [256]u8 = undefined,
+    len: usize = 0,
+    run: ?*const fcft.TextRun = null,
+
+    fn get(self: *TextCache, font: *render_.Font, str: []const u8) ?*const fcft.TextRun {
+        if (str.len <= self.bytes.len and self.len == str.len and mem.eql(u8, self.bytes[0..self.len], str)) {
+            return self.run;
+        }
+
+        if (self.run) |run| run.destroy();
+        self.run = null;
+        self.len = 0;
+
+        if (str.len > self.bytes.len) return null;
+
+        const utf8 = render_.utils.to_utf8(ctx.gpa, str) catch return null;
+        defer ctx.gpa.free(utf8);
+
+        self.run = font.rasterize_text_run(utf8) orelse return null;
+        @memcpy(self.bytes[0..str.len], str);
+        self.len = str.len;
+        return self.run;
+    }
+
+    fn deinit(self: *TextCache) void {
+        if (self.run) |run| run.destroy();
+        self.run = null;
+        self.len = 0;
+    }
+};
 
 font: render_.Font = undefined,
 
@@ -58,6 +93,9 @@ tag_texts: std.ArrayList(*const fcft.TextRun) = .empty,
 tag_texts_valid: bool = false,
 button_texts: std.ArrayList(struct { *const fcft.TextRun, i32 }) = .empty,
 button_texts_valid: bool = false,
+mode_cache: TextCache = .{},
+layout_cache: TextCache = .{},
+title_cache: TextCache = .{},
 
 pub fn init(self: *Self, output: *Output) !void {
     log.debug("<{*}> init", .{self});
@@ -105,6 +143,10 @@ fn clear_text_runs(self: *Self) void {
     for (self.button_texts.items) |d| d[0].destroy();
     self.button_texts.clearRetainingCapacity();
     self.button_texts_valid = false;
+
+    self.mode_cache.deinit();
+    self.layout_cache.deinit();
+    self.title_cache.deinit();
 }
 
 pub inline fn reload_font(self: *Self) void {
@@ -287,6 +329,42 @@ pub fn render(self: *Self) void {
 
         self.render_background();
     }
+}
+
+// Renders the damaged components outside of a render sequence. The background
+// is skipped because it requires `sync_next_commit`/`place`, which may only be
+// sent as part of a render sequence. Used to refresh the bar on status updates
+// without triggering a full manage cycle.
+pub fn render_damaged(self: *Self) void {
+    if (self.hidden) return;
+
+    if (self.static_component_damaged) {
+        defer self.static_component_damaged = false;
+
+        self.render_static_component();
+    }
+
+    if (self.dynamic_component_damaged) {
+        defer self.dynamic_component_damaged = false;
+
+        self.render_dynamic_component();
+    }
+}
+
+fn render_cached_text(
+    self: *Self,
+    cache: *TextCache,
+    str: []const u8,
+    buffer: *render_.Buffer,
+    color: *const pixman.Color,
+    x: i32,
+    y: i32,
+) i16 {
+    if (cache.get(&self.font, str)) |text| {
+        return self.font.render_text(buffer, text, color, x, y);
+    }
+    // cache miss (too long or rasterization failed), fall back to direct rendering
+    return self.font.render_str(buffer, str, color, x, y);
 }
 
 inline fn static_component_width(self: *Self) i32 {
@@ -541,9 +619,10 @@ fn render_dynamic_component(self: *Self) void {
 
         _ = pixman.Image.fillRectangles(.src, buffer.image, &bg, 1, &bg_rect);
 
-        x += self.font.render_str(
-            buffer,
+        x += self.render_cached_text(
+            &self.mode_cache,
             tag,
+            buffer,
             &fg,
             x + @as(i16, @intCast(@divFloor(pad, 2))),
             y,
@@ -555,44 +634,63 @@ fn render_dynamic_component(self: *Self) void {
     bg_rect[0].width = bw - @as(u16, @intCast(@min(x, @as(i32, bw))));
 
     if (ctx.cfg.bar.layout) |area| draw_layout: {
+        const tag = switch (self.output.current_layout()) {
+            .tile => |tile| area.tags.tile.getter.get(tile.master_location),
+            .grid => |grid| area.tags.grid.getter.get(grid.direction),
+            .monocle => area.tags.monocle,
+            .deck => |deck| area.tags.deck.getter.get(deck.master_location),
+            .scroller => area.tags.scroller,
+            .centered_master => |centered_master| area.tags.centered_master.getter.get(centered_master.direction),
+            .float => area.tags.float,
+        };
+        const left = mem.indexOf(u8, tag, "{{");
+        const right = if (left != null) mem.lastIndexOf(u8, tag, "}}") else null;
+        const needs_count = if (left) |l| (if (right) |r| r > l else false) else false;
+
+        if (tag.len == 0) break :draw_layout;
+
+        // single pass: count visible non-floating windows (if the tag asks for
+        // it) and collect minimized windows, instead of two separate scans
+        var num: usize = 0;
+        self.minimized_items_len = 0;
+        {
+            var it = ctx.windows.safeIterator(.forward);
+            while (it.next()) |window| {
+                if (needs_count and window.is_visible_in(self.output) and !window.floating) {
+                    num += 1;
+                }
+                if (window.output == self.output and window.minimized and
+                    (window.sticky or (window.tag & self.output.tag) != 0))
+                {
+                    if (self.minimized_items_len >= self.minimized_items.len) continue;
+                    self.minimized_items[self.minimized_items_len] = .{ .x = 0, .window = window };
+                    self.minimized_items_len += 1;
+                }
+            }
+        }
+
         var layout_tag_buffer: [32]u8 = undefined;
         const layout_tag = blk: {
-            const tag = switch (self.output.current_layout()) {
-                .tile => |tile| area.tags.tile.getter.get(tile.master_location),
-                .grid => |grid| area.tags.grid.getter.get(grid.direction),
-                .monocle => area.tags.monocle,
-                .deck => |deck| area.tags.deck.getter.get(deck.master_location),
-                .scroller => area.tags.scroller,
-                .centered_master => |centered_master| area.tags.centered_master.getter.get(centered_master.direction),
-                .float => area.tags.float,
-            };
-            const left = mem.indexOf(u8, tag, "{{") orelse break :blk tag;
-            const right = mem.lastIndexOf(u8, tag, "}}") orelse break :blk tag;
+            if (left) |l| {
+                if (right) |r| {
+                    if (l < r) {
+                        var buf: [8]u8 = undefined;
+                        const str =
+                            if (r - l == 2 or num > 0) fmt.bufPrint(&buf, "{}", .{num}) catch break :blk tag else tag[l + 2 .. r];
 
-            if (left < right) {
-                var num: usize = 0;
-                var it = ctx.windows.safeIterator(.forward);
-                while (it.next()) |window| {
-                    if (window.is_visible_in(self.output) and !window.floating) {
-                        num += 1;
+                        const n = mem.replace(
+                            u8,
+                            tag,
+                            tag[l .. r + 2],
+                            str,
+                            &layout_tag_buffer,
+                        );
+                        break :blk layout_tag_buffer[0 .. tag.len + str.len * n - (r - l + 2) * n];
                     }
                 }
-
-                var buf: [8]u8 = undefined;
-                const str =
-                    if (right - left == 2 or num > 0) fmt.bufPrint(&buf, "{}", .{num}) catch break :blk tag else tag[left + 2 .. right];
-
-                const n = mem.replace(
-                    u8,
-                    tag,
-                    tag[left .. right + 2],
-                    str,
-                    &layout_tag_buffer,
-                );
-                break :blk layout_tag_buffer[0 .. tag.len + str.len * n - (right - left + 2) * n];
-            } else break :blk tag;
+            }
+            break :blk tag;
         };
-        if (layout_tag.len == 0) break :draw_layout;
 
         const color = ctx.cfg.bar.get_scheme(.{ .layout = self.output.current_layout() }).normal;
         const fg = render_.utils.color(color.fg);
@@ -600,38 +698,31 @@ fn render_dynamic_component(self: *Self) void {
 
         _ = pixman.Image.fillRectangles(.src, buffer.image, &bg, 1, &bg_rect);
 
-        x += self.font.render_str(
-            buffer,
+        x += self.render_cached_text(
+            &self.layout_cache,
             layout_tag,
+            buffer,
             &fg,
             x + @as(i16, @intCast(@divFloor(pad, 2))),
             y,
         ) + @as(i16, @intCast(pad));
 
-        self.minimized_items_len = 0;
-        var it = ctx.windows.safeIterator(.forward);
-        while (it.next()) |window| {
-            if (window.output == self.output and window.minimized and
-                (window.sticky or (window.tag & self.output.tag) != 0))
-            {
-                if (self.minimized_items_len >= self.minimized_items.len) break;
-                self.minimized_items[self.minimized_items_len] = .{ .x = x, .window = window };
-                self.minimized_items_len += 1;
+        for (self.minimized_items[0..self.minimized_items_len]) |*item| {
+            item.x = x;
 
-                var buf: [8]u8 = undefined;
-                const label = if (window.title) |t|
-                    if (t.len > 4) t[0..4] else t
-                else
-                    "???";
-                const min_text = fmt.bufPrint(&buf, "[{s}]", .{label}) catch continue;
-                x += self.font.render_str(
-                    buffer,
-                    min_text,
-                    &fg,
-                    x + @as(i16, @intCast(@divFloor(pad, 2))),
-                    y,
-                ) + @as(i16, @intCast(pad));
-            }
+            var buf: [8]u8 = undefined;
+            const label = if (item.window.title) |t|
+                if (t.len > 4) t[0..4] else t
+            else
+                "???";
+            const min_text = fmt.bufPrint(&buf, "[{s}]", .{label}) catch continue;
+            x += self.font.render_str(
+                buffer,
+                min_text,
+                &fg,
+                x + @as(i16, @intCast(@divFloor(pad, 2))),
+                y,
+            ) + @as(i16, @intCast(pad));
         }
     }
     self.dynamic_splits.appendBounded(x) catch unreachable;
@@ -688,9 +779,10 @@ fn render_dynamic_component(self: *Self) void {
             );
         }
 
-        x += self.font.render_str(
-            buffer,
+        x += self.render_cached_text(
+            &self.title_cache,
             window.title orelse "???",
+            buffer,
             fg,
             x + @as(i16, @intCast(@divFloor(pad, 2))),
             y,

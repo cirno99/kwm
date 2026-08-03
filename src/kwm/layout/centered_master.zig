@@ -29,8 +29,8 @@ pub fn arrange(self: *const Self, output: *Output) !void {
 
     const context = Context.get();
 
-    var windows_buf: [256]*Window = undefined;
-    var windows: std.ArrayList(*Window) = .initBuffer(&windows_buf);
+    var windows: std.ArrayList(*Window) = .empty;
+    defer windows.deinit(ctx.gpa);
     {
         var it = context.windows.safeIterator(.forward);
         while (it.next()) |window| {

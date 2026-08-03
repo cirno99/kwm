@@ -222,6 +222,7 @@ pub fn destroy(self: *Self) void {
     if (comptime build_options.bar_enabled) {
         if (self.output) |output| output.bar.damage(.tags);
     }
+    if (self.output) |output| output.invalidate_occupied_tags();
 
     self.link.remove();
     self.flink.remove();
@@ -242,6 +243,7 @@ pub fn set_output(self: *Self, output: ?*Output, clear_former: bool) void {
         if (comptime build_options.bar_enabled) {
             if (self.output) |o| o.bar.damage(.tags);
         }
+        if (self.output) |o| o.invalidate_occupied_tags();
 
         self.output = output;
 
@@ -252,6 +254,7 @@ pub fn set_output(self: *Self, output: ?*Output, clear_former: bool) void {
         if (comptime build_options.bar_enabled) {
             if (self.output) |o| o.bar.damage(.tags);
         }
+        if (self.output) |o| o.invalidate_occupied_tags();
     }
 
     if (clear_former) self.set_former_output(null);
@@ -261,16 +264,25 @@ pub fn set_output(self: *Self, output: ?*Output, clear_former: bool) void {
 pub fn set_former_output(self: *Self, output: ?[]const u8) void {
     log.debug("<{*}> set former output to `{s}`", .{ self, output orelse "" });
 
-    if (self.former_output) |name| {
-        ctx.gpa.free(name);
-        self.former_output = null;
-    }
-
     if (output) |name| {
+        // reuse the existing allocation when the new name fits, avoiding a
+        // free + dupe on every former output change
+        if (self.former_output) |old| {
+            if (name.len <= old.len) {
+                @memcpy(@constCast(old[0..name.len]), name);
+                self.former_output = old[0..name.len];
+                return;
+            }
+            ctx.gpa.free(old);
+            self.former_output = null;
+        }
         self.former_output = ctx.gpa.dupe(u8, name) catch |err| {
             log.err("dupe {s} failed: {}", .{ name, err });
             return;
         };
+    } else if (self.former_output) |name| {
+        ctx.gpa.free(name);
+        self.former_output = null;
     }
 }
 
@@ -285,6 +297,7 @@ pub fn set_tag(self: *Self, tag: u32) void {
     if (comptime build_options.bar_enabled) {
         if (self.output) |output| output.bar.damage(.tags);
     }
+    if (self.output) |output| output.invalidate_occupied_tags();
 }
 
 
@@ -298,6 +311,7 @@ pub fn toggle_tag(self: *Self, mask: u32) void {
     if (comptime build_options.bar_enabled) {
         if (self.output) |output| output.bar.damage(.tags);
     }
+    if (self.output) |output| output.invalidate_occupied_tags();
 }
 
 
@@ -904,23 +918,43 @@ pub fn hide(self: *Self) void {
 
 
 fn set_appid(self: *Self, app_id: ?[]const u8) void {
-    if (self.app_id) |appid| {
+    if (app_id) |appid| {
+        // reuse the existing allocation when the new value fits, avoiding a
+        // free + dupe on every app_id update
+        if (self.app_id) |old| {
+            if (appid.len <= old.len) {
+                @memcpy(@constCast(old[0..appid.len]), appid);
+                self.app_id = old[0..appid.len];
+                return;
+            }
+            ctx.gpa.free(old);
+            self.app_id = null;
+        }
+        self.app_id = ctx.gpa.dupe(u8, appid) catch return;
+    } else if (self.app_id) |appid| {
         ctx.gpa.free(appid);
         self.app_id = null;
-    }
-    if (app_id) |appid| {
-        self.app_id = ctx.gpa.dupe(u8, appid) catch return;
     }
 }
 
 
 fn set_title(self: *Self, title: ?[]const u8) void {
-    if (self.title) |tt| {
+    if (title) |tt| {
+        // reuse the existing allocation when the new title fits, avoiding a
+        // free + dupe on every terminal title update
+        if (self.title) |old| {
+            if (tt.len <= old.len) {
+                @memcpy(@constCast(old[0..tt.len]), tt);
+                self.title = old[0..tt.len];
+                return;
+            }
+            ctx.gpa.free(old);
+            self.title = null;
+        }
+        self.title = ctx.gpa.dupe(u8, tt) catch return;
+    } else if (self.title) |tt| {
         ctx.gpa.free(tt);
         self.title = null;
-    }
-    if (title) |tt| {
-        self.title = ctx.gpa.dupe(u8, tt) catch return;
     }
 }
 
@@ -991,6 +1025,7 @@ fn swallow(self: *Self, window: *Self) void {
     self.flink.remove();
     window.flink.insert(&self.flink);
 
+    if (window.output) |output| output.invalidate_occupied_tags();
     window.output = self.output;
     window.swallowed_by = self;
     switch (window.fullscreen) {
@@ -999,6 +1034,7 @@ fn swallow(self: *Self, window: *Self) void {
             window.prepare_unfullscreen();
         }
     }
+    if (self.output) |output| output.invalidate_occupied_tags();
 
     self.swallowing_border = .{
         .wl_surface = undefined,
@@ -1028,6 +1064,8 @@ fn unswallow(self: *Self) void {
         self.link.insert(&window.link);
         window.flink.remove();
         self.flink.insert(&window.flink);
+
+        if (self.output) |output| output.invalidate_occupied_tags();
     }
 
     if (self.swallowing_border) |*border| {

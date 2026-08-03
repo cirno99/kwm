@@ -24,7 +24,7 @@ const Tag = union(enum) {
     occupied: types.Direction,
     unoccupied: types.Direction,
 
-    pub fn of(self: *const @This(), base: union(enum) { output: *const Output, window: *const Window }) u32 {
+    pub fn of(self: *const @This(), base: union(enum) { output: *Output, window: *Window }) u32 {
         const output, const base_tag = switch (base) {
             .output => |o| .{ o, o.tag },
             .window => |w| .{ w.output orelse return 0, w.tag },

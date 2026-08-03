@@ -1125,8 +1125,8 @@ fn wl_pointer_listener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *
             if (data.axis != .vertical_scroll) return;
 
             if (comptime build_options.bar_enabled) {
-                var it = ctx.outputs.safeIterator(.forward);
-                while (it.next()) |output| {
+                // only the bar containing the pointer can receive the scroll
+                if (ctx.output_at_position(seat.pointer_position.x, seat.pointer_position.y)) |output| {
                     output.bar.handle_axis(seat, data.discrete);
                 }
             }

@@ -53,6 +53,7 @@ y: i32 = undefined,
 width: i32 = undefined,
 height: i32 = undefined,
 fullscreen_cached: ?*Window = null,
+occupied_tags_cache: ?u32 = null,
 
 background: if (build_options.background_enabled) @import("background.zig") else void = undefined,
 bar: if (build_options.bar_enabled) @import("bar.zig") else void = undefined,
@@ -251,7 +252,9 @@ pub fn switch_to_previous_tag(self: *Self) void {
 }
 
 
-pub fn occupied_tags(self: *const Self) u32 {
+pub fn occupied_tags(self: *Self) u32 {
+    if (self.occupied_tags_cache) |mask| return mask;
+
     var mask: u32 = 0;
     {
         var it = ctx.windows.safeIterator(.forward);
@@ -259,7 +262,14 @@ pub fn occupied_tags(self: *const Self) u32 {
             if (window.output == self and window.swallowed_by == null) mask |= window.tag;
         }
     }
+    self.occupied_tags_cache = mask;
     return mask;
+}
+
+// Invalidates the cached occupied tags mask, which changes whenever a window's
+// output, tag or swallow state changes.
+pub inline fn invalidate_occupied_tags(self: *Self) void {
+    self.occupied_tags_cache = null;
 }
 
 

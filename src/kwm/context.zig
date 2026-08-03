@@ -69,7 +69,7 @@ minimized_order_len: usize = 0,
 key_repeat: ?KeyRepeat,
 
 bar_status_fd: ?posix.fd_t = null,
-last_status: [256]u8 = undefined,
+last_status: [4096]u8 = undefined,
 last_status_len: usize = 0,
 
 terminal_windows: std.AutoHashMap(i32, *Window) = undefined,
@@ -383,35 +383,49 @@ pub fn update_bar_status(self: *Self) void {
             log.debug("update status", .{});
 
             const dest_buf = &@import("bar.zig").status_buffer;
-            const nbytes = posix.read(fd, dest_buf[0 .. dest_buf.len - 1]) catch |err| {
-                switch (err) {
-                    error.WouldBlock => log.debug("no data in fd {}", .{ fd }),
-                    else => log.err("read data from fd {} failed: {}", .{ fd, err }),
+            // drain the fd until it would block, so that status longer than a
+            // single read isn't truncated nor split into multiple updates
+            var total: usize = 0;
+            var eof = false;
+            while (total < dest_buf.len - 1) {
+                const nbytes = posix.read(fd, dest_buf[total .. dest_buf.len - 1]) catch |err| {
+                    switch (err) {
+                        error.WouldBlock => break,
+                        else => log.err("read data from fd {} failed: {}", .{ fd, err }),
+                    }
+                    return;
+                };
+                if (nbytes == 0) {
+                    eof = true;
+                    break;
                 }
+                total += nbytes;
+            }
+            if (total == 0 and !eof) {
+                log.debug("no data in fd {}", .{ fd });
                 return;
-            };
+            }
+            if (eof) self.stop_listening_status();
 
-            log.debug("read {} bytes data from fd {}", .{ nbytes, fd });
+            log.debug("read {} bytes data from fd {}", .{ total, fd });
 
-            if (nbytes > 0) {
-                const n = @min(nbytes, dest_buf.len - 1);
+            if (total > 0) {
+                const n = total;
                 dest_buf[n] = 0;
 
                 if (n == self.last_status_len and mem.eql(u8, self.last_status[0..n], dest_buf[0..n])) return;
                 self.last_status_len = n;
                 @memcpy(self.last_status[0..n], dest_buf[0..n]);
 
-                var show_bar_num: u8 = 0;
+                // A status update only changes the bar content, so render the
+                // bars directly instead of calling `manageDirty()`, which would
+                // trigger a full manage cycle (re-arranging every layout and
+                // re-proposing dimensions to every window).
                 var it = self.outputs.safeIterator(.forward);
                 while (it.next()) |output| {
                     output.bar.damage(.status);
-
-                    if (!output.bar.hidden) {
-                        show_bar_num += 1;
-                    }
+                    output.bar.render_damaged();
                 }
-
-                if (show_bar_num > 0) self.rwm.manageDirty();
             } else {
                 self.stop_listening_status();
             }
@@ -1138,7 +1152,9 @@ fn prepare_manage(self: *Self) void {
     {
         var it = self.windows.safeIterator(.forward);
         while (it.next()) |window| {
-            window.handle_events();
+            if (window.unhandled_events.items.len > 0 or window.floating_changed) {
+                window.handle_events();
+            }
         }
     }
 
@@ -1174,36 +1190,24 @@ fn prepare_manage(self: *Self) void {
 }
 
 
-fn prepare_render_windows(self: *Self) void {
+fn render_windows(self: *Self) void {
     const focused = self.focused_window();
 
-    var it = self.windows.safeIterator(.forward);
-    while (it.next()) |window| {
-        if (!window.is_visible()) {
-            window.hide();
-        } else {
-            window.set_border(
-                if (window.fullscreen == .output) 0
-                else self.cfg.border.width,
-                if (!self.focus_exclusive() and window == focused)
-                    self.cfg.border.color.focus
-                else self.cfg.border.color.unfocus
-            );
-        }
-    }
-
-    if (focused) |window| {
-        // move focus to head of focus_stack
-        if (!window.sticky and self.focus_stack.link.next.? != &window.flink) {
-            self.focus(window, false);
-        }
-    }
-}
-
-fn render_windows(self: *Self) void {
     {
         var it = self.windows.safeIterator(.forward);
         while (it.next()) |window| {
+            if (!window.is_visible()) {
+                window.hide();
+            } else {
+                window.set_border(
+                    if (window.fullscreen == .output) 0
+                    else self.cfg.border.width,
+                    if (!self.focus_exclusive() and window == focused)
+                        self.cfg.border.color.focus
+                    else self.cfg.border.color.unfocus
+                );
+            }
+
             window.render();
 
             if (!window.layer_managed) {
@@ -1227,6 +1231,13 @@ fn render_windows(self: *Self) void {
             window.place(.{
                 .below = self.layer_marker.rwm_shell_surface_node,
             });
+        }
+    }
+
+    if (focused) |window| {
+        // move focus to head of focus_stack
+        if (!window.sticky and self.focus_stack.link.next.? != &window.flink) {
+            self.focus(window, false);
         }
     }
 }
@@ -1284,7 +1295,6 @@ fn rwm_listener(rwm: *river.WindowManagerV1, event: river.WindowManagerV1.Event,
         .render_start => {
             log.debug("render start", .{});
 
-            context.prepare_render_windows();
             context.render_windows();
 
             if (comptime build_options.background_enabled) {
