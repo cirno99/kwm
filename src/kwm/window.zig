@@ -906,6 +906,10 @@ pub fn render(self: *Self) void {
             self.rwm_window_node.setPosition(px, py);
             self.last_render_pos = .{ .x = px, .y = py };
         }
+        if (self.clip_state != .normal) {
+            self.rwm_window.setClipBox(0, 0, 0, 0);
+            self.clip_state = .normal;
+        }
         if (!self.last_visible) {
             self.rwm_window.show();
             self.last_visible = true;

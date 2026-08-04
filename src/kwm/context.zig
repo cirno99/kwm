@@ -553,12 +553,40 @@ pub fn focus_direction(self: *Self, direction: types.WindowDirection) void {
                     .up => layout.Scroller.columnWindow(window, output, .reverse),
                     .down => layout.Scroller.columnWindow(window, output, .forward),
                 };
-                if (target) |w| self.focus(w, true);
+                if (target) |w| {
+                    self.transfer_maximize_fullscreen(window, w);
+                    self.focus(w, true);
+                }
                 return;
             }
         }
-        if (self.directional_target(window, direction)) |w| self.focus(w, true);
+        if (self.directional_target(window, direction)) |w| {
+            self.transfer_maximize_fullscreen(window, w);
+            self.focus(w, true);
+        }
     }
+}
+
+// When the focused window is maximized or fullscreen, replace it with `target`
+// by transferring the maximize/fullscreen state to the target window.
+fn transfer_maximize_fullscreen(self: *Self, from: *Window, to: *Window) void {
+    _ = self;
+    if (!from.maximize and from.fullscreen == .none) return;
+
+    const was_maximized = from.maximize;
+    const was_fullscreen = from.fullscreen;
+
+    if (was_fullscreen != .none) from.prepare_unfullscreen();
+    if (was_maximized) from.toggle_maximize(false);
+
+    if (was_fullscreen != .none) {
+        to.prepare_fullscreen(switch (was_fullscreen) {
+            .none => unreachable,
+            .window => null,
+            .output => |o| o,
+        });
+    }
+    if (was_maximized) to.toggle_maximize(true);
 }
 
 // Swap the focused window with the window in `direction` (in scroller: the
