@@ -18,6 +18,7 @@ const config = @import("config");
 
 const types = @import("types.zig");
 const binding = @import("binding.zig");
+const layout = @import("layout.zig");
 const Output = @import("output.zig");
 const Window = @import("window.zig");
 const Context = @import("context.zig");
@@ -233,7 +234,7 @@ pub fn manage(self: *Self) void {
                 log.debug("<{*}> entering chorded", .{self});
 
                 self.chorded.state = .enabled;
-                self.mode = fmt.bufPrint(&self.mode_buffer, "{s}", .{ ctx.mode }) catch unreachable;
+                self.mode = fmt.bufPrint(&self.mode_buffer, "{s}", .{ctx.mode}) catch unreachable;
             } else {
                 self.mode = fmt.bufPrint(&self.mode_buffer, "{s}", .{ctx.mode}) catch unreachable;
             }
@@ -532,7 +533,6 @@ pub fn handle_actions(self: *Self) void {
             .pointer_resize => {
                 if (self.window_below_pointer.window) |window| {
                     self.window_interaction(window);
-                    window.ensure_floating();
                     window.prepare_resize(.{ .start = .{ .seat = self, .direction = .{ .horizontal = .forward, .vertical = .forward } } });
                 }
             },
@@ -577,6 +577,9 @@ pub fn handle_actions(self: *Self) void {
             .focus_iter => |data| {
                 ctx.focus_iter(data.direction, data.skip);
             },
+            .focus_direction => |data| {
+                ctx.focus_direction(data.direction);
+            },
             .focus_output_iter => |data| {
                 ctx.focus_output_iter(data.direction);
             },
@@ -587,6 +590,9 @@ pub fn handle_actions(self: *Self) void {
             },
             .swap => |data| {
                 ctx.swap(data.direction);
+            },
+            .swap_direction => |data| {
+                ctx.swap_direction(data.direction);
             },
             .toggle_maximize => {
                 if (ctx.focused_window()) |window| {
@@ -676,7 +682,9 @@ pub fn handle_actions(self: *Self) void {
                                 // swap old master with new master
                                 master.link.swapWith(&new_master.link);
                             },
-                            .scroller => window.scroller_x = .center,
+                            .scroller => {
+                                layout.Scroller.columnHead(window, output).scroller_x = .center;
+                            },
                             else => {},
                         }
                     }
@@ -757,11 +765,12 @@ pub fn handle_actions(self: *Self) void {
                         },
                         .scroller => {
                             if (ctx.focus_top_in(output, false)) |window| {
+                                const head = layout.Scroller.columnHead(window, output);
                                 const mfact = switch (data.change) {
                                     .set => |mfact| mfact,
-                                    .step => |step| window.scroller_mfact + step,
+                                    .step => |step| head.scroller_mfact + step,
                                 };
-                                window.scroller_mfact = @min(1, @max(0, mfact));
+                                head.scroller_mfact = @min(1, @max(0, mfact));
                             }
                         },
                         .centered_master => |centered_master| {
@@ -785,6 +794,30 @@ pub fn handle_actions(self: *Self) void {
                         .scroller => |scroller| scroller.inner_gap = @max(ctx.cfg.border.width * 2, scroller.inner_gap + data.step),
                         .centered_master => |centered_master| centered_master.inner_gap = @max(ctx.cfg.border.width * 2, centered_master.inner_gap + data.step),
                         .float => {},
+                    }
+                }
+            },
+            .modify_scroller_row_mfact => |data| {
+                if (ctx.current_output) |output| {
+                    switch (output.current_layout()) {
+                        .scroller => {
+                            if (ctx.focus_top_in(output, false)) |window| {
+                                const mfact = switch (data.change) {
+                                    .set => |mfact| mfact,
+                                    .step => |step| window.scroller_row_mfact + step,
+                                };
+                                window.scroller_row_mfact = @min(1, @max(0, mfact));
+                            }
+                        },
+                        else => {},
+                    }
+                }
+            },
+            .modify_scroller_mode => |data| {
+                if (ctx.current_output) |output| {
+                    switch (output.current_layout()) {
+                        .scroller => |scroller| scroller.mode = data.mode,
+                        else => {},
                     }
                 }
             },
@@ -856,6 +889,72 @@ fn window_interaction(self: *Self, window: *Window) void {
     self.has_pointer_interaction = true;
 }
 
+// Resize a tiled window by adjusting the layout's size parameter, keeping the
+// window in its layout. The drag delta is translated into an mfact change so
+// the resized window and its neighbors are recomputed by `arrange`. The sign is
+// derived from the master location so the master's dragged edge follows the
+// pointer.
+fn resize_tiled(window: *Window, op_data: anytype, new_width: ?i32, new_height: ?i32) void {
+    const output = window.output orelse return;
+    const width_delta = if (new_width) |w| w - op_data.start_width else 0;
+    const height_delta = if (new_height) |h| h - op_data.start_height else 0;
+
+    switch (output.current_layout()) {
+        .tile => |tile| resize_edge(&tile.mfact, tile.master_location, tile.outer_gap, op_data.start_mfact, width_delta, height_delta, output),
+        .deck => |deck| resize_edge(&deck.mfact, deck.master_location, deck.outer_gap, op_data.start_mfact, width_delta, height_delta, output),
+        .centered_master => |centered_master| {
+            const primary = switch (centered_master.direction) {
+                .horizontal => width_delta,
+                .vertical => height_delta,
+            };
+            const usable = @max(1, switch (centered_master.direction) {
+                .horizontal => output.exclusive_width() - 2 * centered_master.outer_gap,
+                .vertical => output.exclusive_height() - 2 * centered_master.outer_gap,
+            });
+            const step = @as(f32, @floatFromInt(primary)) / @as(f32, @floatFromInt(usable));
+            centered_master.mfact = @min(1, @max(0, op_data.start_mfact + step));
+        },
+        .scroller => |scroller| {
+            if (width_delta != 0) {
+                const head = layout.Scroller.columnHead(window, output);
+                const usable = @max(1, output.exclusive_width());
+                head.scroller_mfact = @min(1, @max(0, @as(f32, @floatFromInt(op_data.start_width + width_delta)) / @as(f32, @floatFromInt(usable))));
+            }
+            if (height_delta != 0) {
+                const usable = @max(1, output.exclusive_height() - 2 * scroller.outer_gap);
+                window.scroller_row_mfact = @min(1, @max(0, @as(f32, @floatFromInt(op_data.start_height + height_delta)) / @as(f32, @floatFromInt(usable))));
+            }
+        },
+        else => return,
+    }
+    output.manage();
+}
+
+// Translate a drag delta into an mfact change for a layout with a master placed
+// on an edge, so the dragged master edge follows the pointer.
+fn resize_edge(
+    mfact: *f32,
+    master_location: types.LayoutMasterLocation,
+    outer_gap: i32,
+    start_mfact: f32,
+    width_delta: i32,
+    height_delta: i32,
+    output: *Output,
+) void {
+    const primary, const positive = switch (master_location) {
+        .left => .{ width_delta, true },
+        .right => .{ width_delta, false },
+        .top => .{ height_delta, true },
+        .bottom => .{ height_delta, false },
+    };
+    const usable = @max(1, switch (master_location) {
+        .left, .right => output.exclusive_width() - 2 * outer_gap,
+        .top, .bottom => output.exclusive_height() - 2 * outer_gap,
+    });
+    const step = @as(f32, @floatFromInt(primary)) / @as(f32, @floatFromInt(usable));
+    mfact.* = @min(1, @max(0, start_mfact + (if (positive) step else -step)));
+}
+
 fn shell_surface_interaction(self: *Self, shell_surface: *ShellSurface) void {
     log.debug("<{*}> interaction with shell surface: {*}", .{ self, shell_surface });
 
@@ -925,7 +1024,6 @@ fn rwm_seat_listener(rwm_seat: *river.SeatV1, event: river.SeatV1.Event, seat: *
                                 }
                             else
                                 null;
-                        window.move(new_x, new_y);
 
                         const new_width =
                             if (op_data.direction.horizontal) |direction|
@@ -943,7 +1041,15 @@ fn rwm_seat_listener(rwm_seat: *river.SeatV1, event: river.SeatV1.Event, seat: *
                                 }
                             else
                                 null;
-                        window.resize(new_width, new_height);
+
+                        const floating_op = window.floating or
+                            (if (window.output) |o| o.current_layout() == .float else false);
+                        if (floating_op) {
+                            window.move(new_x, new_y);
+                            window.resize(new_width, new_height);
+                        } else {
+                            resize_tiled(window, op_data, new_width, new_height);
+                        }
                     }
                 },
             }

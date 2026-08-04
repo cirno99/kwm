@@ -127,6 +127,11 @@ scroller_x: ?union(enum) {
     x: i32,
     center,
 } = null,
+scroller_row_mfact: f32 = 1.0,
+scroller_column_start: bool = false,
+// The window focused in this column when focus last left it (stored on the
+// column head), restored when focus moves back to the column from the side.
+scroller_column_focus: ?*Self = null,
 floating_geometry: ?struct {
     x: i32,
     y: i32,
@@ -147,6 +152,7 @@ operator: union(enum) {
         start_y: i32,
         start_width: i32,
         start_height: i32,
+        start_mfact: f32,
         direction: ResizeDirection,
         seat: *Seat,
     },
@@ -169,6 +175,7 @@ pub fn create(rwm_window: *river.WindowV1, output: ?*Output) !*Self {
         .scroller_mfact =
             if (output) |o| o.scroller_mfact()
             else ctx.cfg.layout.scroller.mfact,
+        .scroller_row_mfact = ctx.cfg.layout.scroller.row_mfact,
     };
     window.link.init();
     window.flink.init();
@@ -199,6 +206,32 @@ pub fn destroy(self: *Self) void {
 
             if (seat.window_below_pointer.window == self) {
                 seat.window_below_pointer = .{};
+            }
+        }
+    }
+
+    // Drop references to this window kept by scroller column heads so a
+    // destroyed window is never restored on column focus.
+    var win_it = ctx.windows.safeIterator(.forward);
+    while (win_it.next()) |w| {
+        if (w.scroller_column_focus == self) w.scroller_column_focus = null;
+    }
+
+    // If this window was a column head in the scroller layout, promote the
+    // next tiled window of the column so the remaining windows take over the
+    // head's position instead of merging into the previous column.
+    if (self.scroller_column_start) {
+        if (self.output) |output| {
+            if (output.current_layout() == .scroller) {
+                var link = &self.link;
+                while (link.next.? != &ctx.windows.link) {
+                    link = link.next.?;
+                    const w: *Self = @fieldParentPtr("link", link);
+                    if (!w.is_visible_in(output) or w.floating) continue;
+                    if (w.scroller_column_start) break;
+                    w.scroller_column_start = true;
+                    break;
+                }
             }
         }
     }
@@ -734,12 +767,19 @@ pub fn handle_events(self: *Self) void {
                 switch (state) {
                     .start => |data| {
                         data.seat.op_start(.{ .resize = data.direction });
+                        const start_mfact = if (self.output) |o| switch (o.current_layout()) {
+                            .tile => |t| t.mfact,
+                            .centered_master => |cm| cm.mfact,
+                            .deck => |d| d.mfact,
+                            else => 0,
+                        } else 0;
                         self.operator = .{
                             .resize = .{
                                 .start_x = self.x,
                                 .start_y = self.y,
                                 .start_width = self.width,
                                 .start_height = self.height,
+                                .start_mfact = start_mfact,
                                 .direction = data.direction,
                                 .seat = data.seat,
                             },
@@ -1012,6 +1052,8 @@ fn swallow(self: *Self, window: *Self) void {
 
     self.tag = window.tag;
     self.scroller_x = window.scroller_x;
+    self.scroller_row_mfact = window.scroller_row_mfact;
+    self.scroller_column_start = window.scroller_column_start;
     if (self.floating == window.floating) {
         self.x = window.x;
         self.y = window.y;

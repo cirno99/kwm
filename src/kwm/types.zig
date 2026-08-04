@@ -18,6 +18,13 @@ pub const Direction = enum {
     reverse,
 };
 
+pub const WindowDirection = enum {
+    left,
+    right,
+    up,
+    down,
+};
+
 pub const PlacePosition = union(enum) {
     top,
     bottom,

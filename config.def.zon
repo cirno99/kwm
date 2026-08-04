@@ -270,6 +270,8 @@
         },
         .scroller = .{
             .mfact = 0.5,
+            .row_mfact = 1.0,
+            .mode = .horizontal,
             .inner_gap = 16,
             .outer_gap = 9,
         },
@@ -567,7 +569,7 @@
                 .event = .{
                     .click = .{
                         .pressed = .{
-                            .focus_iter = .{ .direction = .forward },
+                            .focus_direction = .{ .direction = .down },
                         },
                     },
                 },
@@ -578,7 +580,7 @@
                 .event = .{
                     .click = .{
                         .pressed = .{
-                            .focus_iter = .{ .direction = .reverse },
+                            .focus_direction = .{ .direction = .up },
                         },
                     },
                 },
@@ -611,7 +613,7 @@
                 .event = .{
                     .click = .{
                         .pressed = .{
-                            .swap = .{ .direction = .forward },
+                            .swap_direction = .{ .direction = .down },
                         },
                     },
                 },
@@ -622,7 +624,7 @@
                 .event = .{
                     .click = .{
                         .pressed = .{
-                            .swap = .{ .direction = .reverse },
+                            .swap_direction = .{ .direction = .up },
                         },
                     },
                 },
@@ -935,7 +937,7 @@
                 .event = .{
                     .click = .{
                         .pressed = .{
-                            .modify_mfact = .{ .change = .{ .step = 0.01 } },
+                            .focus_direction = .{ .direction = .right },
                         },
                     },
                 },
@@ -946,7 +948,51 @@
                 .event = .{
                     .click = .{
                         .pressed = .{
-                            .modify_mfact = .{ .change = .{ .step = -0.01 } },
+                            .focus_direction = .{ .direction = .left },
+                        },
+                    },
+                },
+            },
+            .{
+                .keysym = "l",
+                .modifiers = .{ .mod4 = true, .shift = true },
+                .event = .{
+                    .click = .{
+                        .pressed = .{
+                            .swap_direction = .{ .direction = .right },
+                        },
+                    },
+                },
+            },
+            .{
+                .keysym = "h",
+                .modifiers = .{ .mod4 = true, .shift = true },
+                .event = .{
+                    .click = .{
+                        .pressed = .{
+                            .swap_direction = .{ .direction = .left },
+                        },
+                    },
+                },
+            },
+            .{
+                .keysym = "bracketright",
+                .modifiers = .{ .mod4 = true },
+                .event = .{
+                    .click = .{
+                        .pressed = .{
+                            .modify_scroller_mode = .{ .mode = .vertical },
+                        },
+                    },
+                },
+            },
+            .{
+                .keysym = "bracketleft",
+                .modifiers = .{ .mod4 = true },
+                .event = .{
+                    .click = .{
+                        .pressed = .{
+                            .modify_scroller_mode = .{ .mode = .horizontal },
                         },
                     },
                 },

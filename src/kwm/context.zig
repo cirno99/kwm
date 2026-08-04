@@ -20,6 +20,7 @@ const config = @import("config");
 
 const utils = @import("utils.zig");
 const types = @import("types.zig");
+const layout = @import("layout.zig");
 const Seat = @import("seat.zig");
 const Output = @import("output.zig");
 const Window = @import("window.zig");
@@ -540,6 +541,110 @@ pub fn focus_iter(self: *Self, direction: types.Direction, skip: types.WindowIte
     }
 }
 
+pub fn focus_direction(self: *Self, direction: types.WindowDirection) void {
+    log.debug("focus direction: {s}", .{@tagName(direction)});
+
+    if (self.focused_window()) |window| {
+        if (window.output) |output| {
+            if (!window.floating and output.current_layout() == .scroller) {
+                const target = switch (direction) {
+                    .left => layout.Scroller.prevColumnFocus(window, output),
+                    .right => layout.Scroller.nextColumnFocus(window, output),
+                    .up => layout.Scroller.columnWindow(window, output, .reverse),
+                    .down => layout.Scroller.columnWindow(window, output, .forward),
+                };
+                if (target) |w| self.focus(w, true);
+                return;
+            }
+        }
+        if (self.directional_target(window, direction)) |w| self.focus(w, true);
+    }
+}
+
+// Swap the focused window with the window in `direction` (in scroller: the
+// adjacent column for left/right, the window above/below in the same column
+// for up/down; otherwise: the geometrically closest window in `direction`).
+pub fn swap_direction(self: *Self, direction: types.WindowDirection) void {
+    log.debug("swap direction: {s}", .{@tagName(direction)});
+
+    if (self.focused_window()) |window| {
+        if (window.floating) return;
+        if (window.fullscreen == .output) return;
+        if (self.directional_target(window, direction)) |target| {
+            const in_scroller = if (window.output) |output|
+                output.current_layout() == .scroller
+            else
+                false;
+            if (in_scroller) {
+                layout.Scroller.swap(window, target);
+            } else {
+                window.link.swapWith(&target.link);
+            }
+            self.focus(window, true);
+        }
+    }
+}
+
+// Returns the window to focus or swap with `window` in `direction`, or null.
+fn directional_target(self: *Self, window: *Window, direction: types.WindowDirection) ?*Window {
+    const output = window.output orelse return null;
+    if (!window.floating and output.current_layout() == .scroller) {
+        return switch (direction) {
+            .left => layout.Scroller.prevColumn(layout.Scroller.columnHead(window, output), output),
+            .right => layout.Scroller.nextColumn(layout.Scroller.columnTail(window, output), output),
+            .up => layout.Scroller.columnWindow(window, output, .reverse),
+            .down => layout.Scroller.columnWindow(window, output, .forward),
+        };
+    }
+    return self.focus_directional(window, direction);
+}
+
+// Focus the window geometrically closest to `window` in `direction` on the same
+// output, considering only visible non-floating windows.
+fn focus_directional(self: *Self, window: *Window, direction: types.WindowDirection) ?*Window {
+    const output = window.output orelse return null;
+    const f_left = window.x;
+    const f_top = window.y;
+    const f_right = window.x + window.width;
+    const f_bottom = window.y + window.height;
+
+    var best: ?*Window = null;
+    var best_overlap: i32 = std.math.minInt(i32);
+    var best_dist: i32 = std.math.maxInt(i32);
+
+    var link = &self.windows.link;
+    while (link.next.? != &self.windows.link) {
+        link = link.next.?;
+        const w: *Window = @fieldParentPtr("link", link);
+        if (w == window) continue;
+        if (!w.is_visible_in(output)) continue;
+        if (w.floating) continue;
+
+        const c_left = w.x;
+        const c_top = w.y;
+        const c_right = w.x + w.width;
+        const c_bottom = w.y + w.height;
+
+        const dist, const overlap = switch (direction) {
+            .left => .{ f_left - c_right, @min(f_bottom, c_bottom) - @max(f_top, c_top) },
+            .right => .{ c_left - f_right, @min(f_bottom, c_bottom) - @max(f_top, c_top) },
+            .up => .{ f_top - c_bottom, @min(f_right, c_right) - @max(f_left, c_left) },
+            .down => .{ c_top - f_bottom, @min(f_right, c_right) - @max(f_left, c_left) },
+        };
+        if (dist < 0) continue;
+
+        if (best == null or
+            overlap > best_overlap or
+            (overlap == best_overlap and dist < best_dist))
+        {
+            best = w;
+            best_overlap = overlap;
+            best_dist = dist;
+        }
+    }
+    return best;
+}
+
 pub fn focus_top_in(self: *Self, output: *Output, skip_floating: bool) ?*Window {
     var it = self.focus_stack.safeIterator(.forward);
     while (it.next()) |window| {
@@ -703,7 +808,9 @@ pub fn swap(self: *Self, direction: types.Direction) void {
             defer win = new_window;
             if (new_window == window) break;
             if (new_window.is_visible_in(window.output.?) and !new_window.floating) {
-                window.link.swapWith(&new_window.link);
+                if (window.output.?.current_layout() == .scroller) {
+                    layout.Scroller.swap(window, new_window);
+                } else window.link.swapWith(&new_window.link);
                 self.focus(window, true);
                 break;
             }
@@ -713,6 +820,20 @@ pub fn swap(self: *Self, direction: types.Direction) void {
 
 pub fn attach_window(self: *Self, window: *Window, mode: types.WindowAttachMode) void {
     log.debug("attach {*}: {s}", .{ window, @tagName(mode) });
+
+    if (self.current_output) |output| {
+        switch (output.current_layout()) {
+            .scroller => |scroller| {
+                window.scroller_column_start = switch (scroller.mode) {
+                    .horizontal => true,
+                    .vertical => false,
+                };
+                layout.Scroller.attach(window, self.focused_window(), output, mode);
+                return;
+            },
+            else => window.scroller_column_start = true,
+        }
+    } else window.scroller_column_start = true;
 
     switch (mode) {
         .top => self.windows.prepend(window),
