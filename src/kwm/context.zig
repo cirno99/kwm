@@ -627,8 +627,15 @@ fn directional_target(self: *Self, window: *Window, direction: types.WindowDirec
     return self.focus_directional(window, direction);
 }
 
-// Focus the window geometrically closest to `window` in `direction` on the same
-// output, considering only visible non-floating windows.
+// Focus the window in `direction` on the same output, considering only visible
+// non-floating windows. A candidate is a match if its leading edge extends
+// strictly past the corresponding edge of the focused window: for LEFT the
+// candidate's left edge must be left of the focused window's left edge, for
+// RIGHT its right edge must be right of the focused window's right edge (and
+// analogously for UP/DOWN). Windows may partially overlap the focused window,
+// so in the float layout any window whose leading edge lies in `direction` is
+// focusable. Among matches the one with the most overlap along the
+// perpendicular axis is preferred, then the nearest.
 fn focus_directional(self: *Self, window: *Window, direction: types.WindowDirection) ?*Window {
     const output = window.output orelse return null;
     const f_left = window.x;
@@ -653,13 +660,13 @@ fn focus_directional(self: *Self, window: *Window, direction: types.WindowDirect
         const c_right = w.x + w.width;
         const c_bottom = w.y + w.height;
 
-        const dist, const overlap = switch (direction) {
-            .left => .{ f_left - c_right, @min(f_bottom, c_bottom) - @max(f_top, c_top) },
-            .right => .{ c_left - f_right, @min(f_bottom, c_bottom) - @max(f_top, c_top) },
-            .up => .{ f_top - c_bottom, @min(f_right, c_right) - @max(f_left, c_left) },
-            .down => .{ c_top - f_bottom, @min(f_right, c_right) - @max(f_left, c_left) },
+        const dist, const overlap, const beyond = switch (direction) {
+            .left => .{ f_left - c_right, @min(f_bottom, c_bottom) - @max(f_top, c_top), c_left < f_left },
+            .right => .{ c_left - f_right, @min(f_bottom, c_bottom) - @max(f_top, c_top), c_right > f_right },
+            .up => .{ f_top - c_bottom, @min(f_right, c_right) - @max(f_left, c_left), c_top < f_top },
+            .down => .{ c_top - f_bottom, @min(f_right, c_right) - @max(f_left, c_left), c_bottom > f_bottom },
         };
-        if (dist < 0) continue;
+        if (!beyond) continue;
 
         if (best == null or
             overlap > best_overlap or
