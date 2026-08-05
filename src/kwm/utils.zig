@@ -10,7 +10,7 @@ const wl = wayland.client.wl;
 
 const types = @import("types.zig");
 
-const env_pattern = mvzr.compile("\\$\\{.*\\}").?;
+const env_pattern = mvzr.compile("\\$\\{[^}]*\\}").?;
 
 
 pub inline fn logical2physics(T: type, logical: T, scale: u32) T {
@@ -111,10 +111,18 @@ pub fn parent_pid(io: Io, pid: i32) i32 {
     var buffer: [256]u8 = undefined;
     const contents = Io.Dir.cwd().readFile(io, path, &buffer) catch return 0;
 
-    var it = mem.splitAny(u8, contents, " ");
-    _ = it.next(); // pid
-    _ = it.next(); // process name
-    _ = it.next(); // process state
+    return parse_ppid(contents);
+}
+
+// Extracts the parent pid (field 4) from the contents of a `/proc/[pid]/stat`
+// file. The comm field (field 2) is wrapped in parentheses and may contain
+// spaces or ')' itself (e.g. `tmux: server`), so the fields after it must be
+// parsed starting from the last ')' rather than by splitting the whole line on
+// spaces.
+fn parse_ppid(contents: []const u8) i32 {
+    const close = mem.lastIndexOfScalar(u8, contents, ')') orelse return 0;
+    var it = mem.tokenizeAny(u8, contents[close + 1 ..], " ");
+    _ = it.next() orelse return 0; // process state
     const ppid_str = it.next() orelse return 0;
 
     return fmt.parseInt(i32, ppid_str, 10) catch return 0;
@@ -159,4 +167,57 @@ pub fn expand_env_str(
     }
 
     return result;
+}
+
+
+test "parse_ppid handles comm fields containing spaces and parentheses" {
+    const testing = std.testing;
+
+    try testing.expectEqual(@as(i32, 1), parse_ppid("123 (bash) S 1 123 123 0 -1 4194304"));
+    try testing.expectEqual(@as(i32, 1), parse_ppid("456 (tmux: server) S 1 456 456 0 -1 4194304"));
+    try testing.expectEqual(@as(i32, 42), parse_ppid("789 (a (nested) name) R 42 789 789 0 -1 4194304"));
+    try testing.expectEqual(@as(i32, 0), parse_ppid("invalid stat contents"));
+    try testing.expectEqual(@as(i32, 0), parse_ppid("1 (bash) S xx"));
+}
+
+test "expand_env_str expands multiple variables" {
+    const testing = std.testing;
+
+    var env = process.Environ.Map.init(testing.allocator);
+    defer env.deinit();
+    try env.put("HOME", "/home/user");
+    try env.put("USER", "alice");
+
+    var result = try expand_env_str(
+        .{ .gpa = testing.allocator, .env = &env },
+        "${HOME}/.cache/${USER}.fifo",
+    );
+    defer result.deinit(testing.allocator);
+
+    try testing.expectEqualStrings("/home/user/.cache/alice.fifo", result.items);
+}
+
+test "expand_env_str keeps missing variables verbatim" {
+    const testing = std.testing;
+
+    var env = process.Environ.Map.init(testing.allocator);
+    defer env.deinit();
+    try env.put("HOME", "/home/user");
+
+    var result = try expand_env_str(
+        .{ .gpa = testing.allocator, .env = &env },
+        "${HOME}/${UNDEFINED}",
+    );
+    defer result.deinit(testing.allocator);
+
+    try testing.expectEqualStrings("/home/user/${UNDEFINED}", result.items);
+}
+
+test "shift_tag rotates single-bit tags" {
+    const testing = std.testing;
+
+    try testing.expectEqual(@as(u32, 2), shift_tag(1, 0, 9, .forward));
+    try testing.expectEqual(@as(u32, 1), shift_tag(@as(u32, 1) << 8, 0, 9, .forward));
+    try testing.expectEqual(@as(u32, 1) << 8, shift_tag(1, 0, 9, .reverse));
+    try testing.expectEqual(@as(u32, 0), shift_tag(0, 0, 9, .forward));
 }

@@ -33,6 +33,10 @@ const ctx = Context.get();
 pub const init = Context.init;
 pub const deinit = Context.deinit;
 
+test {
+    _ = @import("kwm/utils.zig");
+}
+
 pub fn run(wl_display: *wl.Display) !void {
     Context.check_init();
 

@@ -64,6 +64,31 @@ const TextCache = struct {
     }
 };
 
+// Caches the rasterized status text runs keyed by the status content. The
+// status seldom changes, but the dynamic component is re-rendered on every
+// focus/title change, so the runs are reused as long as the content is the
+// same. Status longer than the cache buffer is rendered without caching.
+const StatusCache = struct {
+    bytes: [status_buffer.len - 1]u8 = undefined,
+    len: usize = 0,
+    runs: std.ArrayList(struct { pixman.Color, *const fcft.TextRun }) = .empty,
+
+    fn matches(self: *const StatusCache, str: []const u8) bool {
+        return str.len <= self.bytes.len and self.len == str.len and mem.eql(u8, self.bytes[0..self.len], str);
+    }
+
+    fn reset(self: *StatusCache) void {
+        for (self.runs.items) |d| d[1].destroy();
+        self.runs.clearRetainingCapacity();
+        self.len = 0;
+    }
+
+    fn deinit(self: *StatusCache, gpa: mem.Allocator) void {
+        self.reset();
+        self.runs.deinit(gpa);
+    }
+};
+
 font: render_.Font = undefined,
 
 wl_surface: *wl.Surface = undefined,
@@ -93,9 +118,10 @@ tag_texts: std.ArrayList(*const fcft.TextRun) = .empty,
 tag_texts_valid: bool = false,
 button_texts: std.ArrayList(struct { *const fcft.TextRun, i32 }) = .empty,
 button_texts_valid: bool = false,
-mode_cache: TextCache = .{},
-layout_cache: TextCache = .{},
-title_cache: TextCache = .{},
+    mode_cache: TextCache = .{},
+    layout_cache: TextCache = .{},
+    title_cache: TextCache = .{},
+    status_cache: StatusCache = .{},
 
 pub fn init(self: *Self, output: *Output) !void {
     log.debug("<{*}> init", .{self});
@@ -130,6 +156,8 @@ pub fn deinit(self: *Self) void {
     self.button_texts.deinit(ctx.gpa);
     self.font.deinit();
 
+    self.status_cache.deinit(ctx.gpa);
+
     self.static_splits.deinit(ctx.gpa);
     self.button_xs.deinit(ctx.gpa);
     self.button_widths.deinit(ctx.gpa);
@@ -147,6 +175,7 @@ fn clear_text_runs(self: *Self) void {
     self.mode_cache.deinit();
     self.layout_cache.deinit();
     self.title_cache.deinit();
+    self.status_cache.reset();
 }
 
 pub inline fn reload_font(self: *Self) void {
@@ -823,11 +852,6 @@ fn render_dynamic_component(self: *Self) void {
     var total_button_width: i32 = 0;
     for (self.button_texts.items) |d| total_button_width += d[1];
 
-    var status_datas: std.ArrayList(struct { pixman.Color, *const fcft.TextRun }) = .empty;
-    defer {
-        for (status_datas.items) |d| d[1].destroy();
-        status_datas.deinit(ctx.gpa);
-    }
     var status_raw: []const u8 = "";
     if (ctx.cfg.bar.status) |status_area| {
         status_raw = mem.trimEnd(
@@ -840,39 +864,66 @@ fn render_dynamic_component(self: *Self) void {
         );
     }
 
-    if (status_raw.len > 0) {
-        const sc = ctx.cfg.bar.get_scheme(.status).normal;
-        const sf = render_.utils.color(sc.fg);
-        var cc = sf;
-        var i: usize = 0;
-        var it = color_pattern.iterator(status_raw);
-        var match = it.next();
-        while (i < status_raw.len) {
-            if (match == null or i < match.?.start) {
-                const end = if (match) |m| m.start else status_raw.len;
-                const utf8 = render_.utils.to_utf8(ctx.gpa, status_raw[i..end]) catch break;
-                defer ctx.gpa.free(utf8);
-                const text = self.font.rasterize_text_run(utf8) orelse break;
-                status_datas.append(ctx.gpa, .{ cc, text }) catch |err| {
-                    log.warn("append status datas failed: {}", .{err});
-                    break;
-                };
-                i = end;
-            } else if (i == match.?.start) {
-                if (match.?.slice.len == 3) {
-                    cc = sf;
-                } else {
-                    const hex = match.?.slice[2..];
-                    cc = render_.utils.color(fmt.parseInt(u32, hex, 16) catch break);
-                }
-                i += match.?.slice.len;
-                match = it.next();
-            } else unreachable;
+    // Rasterizing the status is expensive and the dynamic component is
+    // re-rendered on every focus/title change, but the status seldom changes,
+    // so reuse the previously rasterized runs while the content is the same.
+    var status_datas: std.ArrayList(struct { pixman.Color, *const fcft.TextRun }) = .empty;
+    var status_width: i32 = 0;
+    if (self.status_cache.matches(status_raw)) {
+        status_datas = self.status_cache.runs;
+        for (status_datas.items) |d| status_width += @as(i32, @intCast(render_.utils.text_width(d[1])));
+    } else {
+        self.status_cache.reset();
+
+        var fully_parsed = status_raw.len == 0;
+        if (status_raw.len > 0) parse: {
+            const sc = ctx.cfg.bar.get_scheme(.status).normal;
+            const sf = render_.utils.color(sc.fg);
+            var cc = sf;
+            var i: usize = 0;
+            var it = color_pattern.iterator(status_raw);
+            var match = it.next();
+            while (i < status_raw.len) {
+                if (match == null or i < match.?.start) {
+                    const end = if (match) |m| m.start else status_raw.len;
+                    const utf8 = render_.utils.to_utf8(ctx.gpa, status_raw[i..end]) catch break :parse;
+                    defer ctx.gpa.free(utf8);
+                    const text = self.font.rasterize_text_run(utf8) orelse break :parse;
+                    status_datas.append(ctx.gpa, .{ cc, text }) catch |err| {
+                        log.warn("append status datas failed: {}", .{err});
+                        text.destroy();
+                        break :parse;
+                    };
+                    status_width += @as(i32, @intCast(render_.utils.text_width(text)));
+                    i = end;
+                } else if (i == match.?.start) {
+                    if (match.?.slice.len == 3) {
+                        cc = sf;
+                    } else {
+                        const hex = match.?.slice[2..];
+                        cc = render_.utils.color(fmt.parseInt(u32, hex, 16) catch break :parse);
+                    }
+                    i += match.?.slice.len;
+                    match = it.next();
+                } else unreachable;
+            }
+            fully_parsed = true;
+        }
+
+        // keep the runs for future renders when they cover the whole status
+        if (fully_parsed and status_raw.len <= self.status_cache.bytes.len) {
+            self.status_cache.runs = status_datas;
+            @memcpy(self.status_cache.bytes[0..status_raw.len], status_raw);
+            self.status_cache.len = status_raw.len;
         }
     }
-
-    var total_status_width: i32 = 0;
-    for (status_datas.items) |d| total_status_width += @as(i32, @intCast(render_.utils.text_width(d[1])));
+    defer {
+        if (!self.status_cache.matches(status_raw)) {
+            for (status_datas.items) |d| d[1].destroy();
+            status_datas.deinit(ctx.gpa);
+        }
+    }
+    const total_status_width = status_width;
 
     const total_right_width = total_button_width + total_status_width;
     const right_block_x: i16 = @intCast(@max(

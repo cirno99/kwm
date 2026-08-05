@@ -311,9 +311,7 @@ pub fn reload_config(self: *Self) void {
 
             var it = self.outputs.safeIterator(.forward);
             while (it.next()) |output| {
-                if (mask.bar) {
-                    output.bar.reload_font();
-                }
+                output.bar.reload_font();
                 output.bar.damage(.all);
             }
         }
