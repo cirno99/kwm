@@ -210,6 +210,16 @@ pub fn destroy(self: *Self) void {
         }
     }
 
+    // If this window was holding an active move/resize operator, end it so
+    // river's seat op does not stay dangling (which would spam op_delta and
+    // leave the pointer effectively unresponsive).
+    switch (self.operator) {
+        .none => {},
+        .move => |data| data.seat.op_end(),
+        .resize => |data| data.seat.op_end(),
+    }
+    self.operator = .none;
+
     // Drop references to this window kept by scroller column heads so a
     // destroyed window is never restored on column focus.
     var win_it = ctx.windows.safeIterator(.forward);

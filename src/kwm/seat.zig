@@ -986,7 +986,7 @@ fn rwm_seat_listener(rwm_seat: *river.SeatV1, event: river.SeatV1.Event, seat: *
 
             const window = ctx.focused_window() orelse return;
             switch (window.operator) {
-                .none => unreachable,
+                .none => log.warn("<{*}> op delta while no window has an active operator, ignoring", .{seat}),
                 .move => |op_data| {
                     if (op_data.seat == seat) {
                         const abs_x = op_data.origin_output.x + op_data.start_x + data.dx;
@@ -1057,22 +1057,28 @@ fn rwm_seat_listener(rwm_seat: *river.SeatV1, event: river.SeatV1.Event, seat: *
         .op_release => {
             log.debug("<{*}> op release", .{seat});
 
-            if (ctx.focused_window()) |window| {
+            // End the op on whichever window holds the operator for this seat,
+            // not only the focused window. If focus moved to another window
+            // (e.g. a new window grabbed focus mid-drag), the op would
+            // otherwise never be ended, leaving river's seat op dangling and
+            // spamming op_delta forever.
+            var it = ctx.windows.safeIterator(.forward);
+            while (it.next()) |window| {
                 switch (window.operator) {
                     .none => {},
                     .move => |data| {
                         if (data.seat == seat) {
                             window.prepare_move(.stop);
+                            break;
                         }
                     },
                     .resize => |data| {
                         if (data.seat == seat) {
                             window.prepare_resize(.stop);
+                            break;
                         }
                     },
                 }
-            } else {
-                log.debug("no window focused", .{});
             }
         },
         .pointer_enter => |data| {
