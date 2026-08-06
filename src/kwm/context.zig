@@ -614,15 +614,54 @@ pub fn swap_direction(self: *Self, direction: types.WindowDirection) void {
 // Returns the window to focus or swap with `window` in `direction`, or null.
 fn directional_target(self: *Self, window: *Window, direction: types.WindowDirection) ?*Window {
     const output = window.output orelse return null;
-    if (!window.floating and output.current_layout() == .scroller) {
-        return switch (direction) {
-            .left => layout.Scroller.prevColumn(layout.Scroller.columnHead(window, output), output),
-            .right => layout.Scroller.nextColumn(layout.Scroller.columnTail(window, output), output),
-            .up => layout.Scroller.columnWindow(window, output, .reverse),
-            .down => layout.Scroller.columnWindow(window, output, .forward),
-        };
+    if (!window.floating) {
+        if (output.current_layout() == .scroller) {
+            return switch (direction) {
+                .left => layout.Scroller.prevColumn(layout.Scroller.columnHead(window, output), output),
+                .right => layout.Scroller.nextColumn(layout.Scroller.columnTail(window, output), output),
+                .up => layout.Scroller.columnWindow(window, output, .reverse),
+                .down => layout.Scroller.columnWindow(window, output, .forward),
+            };
+        }
+        // In monocle every tiled window occupies the same geometry, so the
+        // geometric search below can never find a target. Cycle through the
+        // visible non-floating windows on the output instead.
+        if (output.current_layout() == .monocle) {
+            return self.monocle_target(window, output, direction);
+        }
     }
     return self.focus_directional(window, direction);
+}
+
+// The window before/after `window` on `output`, wrapping around the window
+// list. Left/up map to the previous window, right/down to the next one.
+fn monocle_target(self: *Self, window: *Window, output: *Output, direction: types.WindowDirection) ?*Window {
+    return switch (direction) {
+        .left, .up => self.monocle_step(window, output, .reverse),
+        .right, .down => self.monocle_step(window, output, .forward),
+    };
+}
+
+fn monocle_step(self: *Self, window: *Window, output: *Output, comptime dir: types.Direction) ?*Window {
+    var win = window;
+    while (true) {
+        const new_window = utils.cycle_list(
+            Window,
+            true,
+            &self.windows.link,
+            &win.link,
+            switch (comptime dir) {
+                .forward => .next,
+                .reverse => .prev,
+            },
+        ) orelse break;
+        defer win = new_window;
+        if (new_window == window) break;
+        if (!new_window.is_visible_in(output)) continue;
+        if (new_window.floating) continue;
+        return new_window;
+    }
+    return null;
 }
 
 // Focus the window in `direction` on the same output, considering only visible
