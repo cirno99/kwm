@@ -71,6 +71,7 @@ const TextCache = struct {
 const StatusCache = struct {
     bytes: [status_buffer.len - 1]u8 = undefined,
     len: usize = 0,
+    width: i32 = 0,
     runs: std.ArrayList(struct { pixman.Color, *const fcft.TextRun }) = .empty,
 
     fn matches(self: *const StatusCache, str: []const u8) bool {
@@ -81,6 +82,7 @@ const StatusCache = struct {
         for (self.runs.items) |d| d[1].destroy();
         self.runs.clearRetainingCapacity();
         self.len = 0;
+        self.width = 0;
     }
 
     fn deinit(self: *StatusCache, gpa: mem.Allocator) void {
@@ -871,7 +873,7 @@ fn render_dynamic_component(self: *Self) void {
     var status_width: i32 = 0;
     if (self.status_cache.matches(status_raw)) {
         status_datas = self.status_cache.runs;
-        for (status_datas.items) |d| status_width += @as(i32, @intCast(render_.utils.text_width(d[1])));
+        status_width = self.status_cache.width;
     } else {
         self.status_cache.reset();
 
@@ -913,6 +915,7 @@ fn render_dynamic_component(self: *Self) void {
         // keep the runs for future renders when they cover the whole status
         if (fully_parsed and status_raw.len <= self.status_cache.bytes.len) {
             self.status_cache.runs = status_datas;
+            self.status_cache.width = status_width;
             @memcpy(self.status_cache.bytes[0..status_raw.len], status_raw);
             self.status_cache.len = status_raw.len;
         }

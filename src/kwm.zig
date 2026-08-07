@@ -35,6 +35,7 @@ pub const deinit = Context.deinit;
 
 test {
     _ = @import("kwm/utils.zig");
+    _ = @import("kwm/render/utils.zig");
 }
 
 pub fn run(wl_display: *wl.Display) !void {
