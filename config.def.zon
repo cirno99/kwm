@@ -930,6 +930,18 @@
             .{ .keysym = "8", .modifiers = .{ .mod4 = true, .ctrl = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .toggle_window_tag = .{ .mask = 0b10000000 } } } } },
             .{ .keysym = "9", .modifiers = .{ .mod4 = true, .ctrl = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .toggle_window_tag = .{ .mask = 0b100000000 } } } } },
 
+            // focus the window of the Nth column in the scroller layout; 0 = last column
+            .{ .keysym = "0", .modifiers = .{ .mod1 = true }, .event = .{ .click = .{ .pressed = .{ .focus_scroller_column = .{ .column = 0 } } } } },
+            .{ .keysym = "1", .modifiers = .{ .mod1 = true }, .event = .{ .click = .{ .pressed = .{ .focus_scroller_column = .{ .column = 1 } } } } },
+            .{ .keysym = "2", .modifiers = .{ .mod1 = true }, .event = .{ .click = .{ .pressed = .{ .focus_scroller_column = .{ .column = 2 } } } } },
+            .{ .keysym = "3", .modifiers = .{ .mod1 = true }, .event = .{ .click = .{ .pressed = .{ .focus_scroller_column = .{ .column = 3 } } } } },
+            .{ .keysym = "4", .modifiers = .{ .mod1 = true }, .event = .{ .click = .{ .pressed = .{ .focus_scroller_column = .{ .column = 4 } } } } },
+            .{ .keysym = "5", .modifiers = .{ .mod1 = true }, .event = .{ .click = .{ .pressed = .{ .focus_scroller_column = .{ .column = 5 } } } } },
+            .{ .keysym = "6", .modifiers = .{ .mod1 = true }, .event = .{ .click = .{ .pressed = .{ .focus_scroller_column = .{ .column = 6 } } } } },
+            .{ .keysym = "7", .modifiers = .{ .mod1 = true }, .event = .{ .click = .{ .pressed = .{ .focus_scroller_column = .{ .column = 7 } } } } },
+            .{ .keysym = "8", .modifiers = .{ .mod1 = true }, .event = .{ .click = .{ .pressed = .{ .focus_scroller_column = .{ .column = 8 } } } } },
+            .{ .keysym = "9", .modifiers = .{ .mod1 = true }, .event = .{ .click = .{ .pressed = .{ .focus_scroller_column = .{ .column = 9 } } } } },
+
             .{
                 .keysym = "l",
                 .modifiers = .{ .mod4 = true },

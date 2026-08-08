@@ -707,6 +707,21 @@ pub fn handle_actions(self: *Self) void {
                     }
                 }
             },
+            .focus_scroller_column => |data| {
+                if (ctx.current_output) |output| {
+                    if (output.current_layout() == .scroller) {
+                        const head = if (data.column == 0)
+                            layout.Scroller.lastColumn(output)
+                        else
+                            layout.Scroller.nthColumn(output, data.column);
+                        if (head) |col_head| {
+                            col_head.scroller_x = .center;
+                            const target = layout.Scroller.columnFocusTarget(col_head, output);
+                            ctx.focus(target, true);
+                        }
+                    }
+                }
+            },
             .switch_layout => |data| {
                 if (ctx.current_output) |output| {
                     output.set_current_layout(data.layout);

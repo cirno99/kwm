@@ -75,6 +75,36 @@ pub fn nextColumn(tail: *Window, output: *Output) ?*Window {
     return implicit;
 }
 
+// The head of the `n`th column (1-based) in window list order. The first tiled
+// window counts as the head of the first column even without an explicit
+// column-start marker, so stacked (vertical mode) windows resolve to column 1.
+pub fn nthColumn(output: *Output, n: u32) ?*Window {
+    if (n == 0) return null;
+    var count: u32 = 0;
+    var it = ctx.windows.safeIterator(.forward);
+    while (it.next()) |window| {
+        if (!isTiled(window, output)) continue;
+        if (count == 0 or window.scroller_column_start) {
+            count += 1;
+            if (count == n) return window;
+        }
+    }
+    return null;
+}
+
+// The head of the last column in window list order. Tracks the head of the
+// last column while iterating, so stacked (vertical mode) windows resolve to
+// the head of the single column.
+pub fn lastColumn(output: *Output) ?*Window {
+    var head: ?*Window = null;
+    var it = ctx.windows.safeIterator(.forward);
+    while (it.next()) |window| {
+        if (!isTiled(window, output)) continue;
+        if (head == null or window.scroller_column_start) head = window;
+    }
+    return head;
+}
+
 fn columnWidth(head: *Window, available_width: i32) i32 {
     return @intFromFloat(@as(f32, @floatFromInt(available_width)) * head.scroller_mfact);
 }
@@ -154,6 +184,16 @@ pub fn attach(
     output: *Output,
     mode: types.WindowAttachMode,
 ) void {
+    // A new column head becomes the master column once focused; inherit the
+    // position of the currently focused column so it doesn't jump to the
+    // left edge of the screen on first arrange.
+    if (window.scroller_column_start and window.scroller_x == null) {
+        if (focused) |focus| {
+            if (isTiled(focus, output)) {
+                window.scroller_x = columnHead(focus, output).scroller_x;
+            }
+        }
+    }
     switch (mode) {
         .top => ctx.windows.prepend(window),
         .bottom => ctx.windows.append(window),

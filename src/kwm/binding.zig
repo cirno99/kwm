@@ -125,6 +125,7 @@ pub const Action = union(enum) {
     toggle_swallow,
     zoom: struct { swap: bool },
     focus_master_return,
+    focus_scroller_column: struct { column: u32 },
     switch_layout: struct { layout: layout.Type },
     switch_to_previous_layout,
     toggle_bar,
