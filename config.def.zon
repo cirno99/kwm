@@ -239,11 +239,10 @@
             .inner_gap = 12,
             .outer_gap = 9,
 
-            // .left
-            // .right
-            // .top
-            // .bottom
-            .master_location = .left,
+            // .top: horizontal split first, then spiral 横竖横竖...
+            // .left: vertical split first, then spiral 竖横竖横...
+            // .bottom / .right: same but master on that side
+            .master_location = .top,
         },
         .grid = .{
             .outer_gap = 9,

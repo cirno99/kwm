@@ -21,6 +21,18 @@ inner_gap: i32,
 outer_gap: i32,
 master_location: MasterLocation,
 
+const Rect = struct {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+};
+
+fn place(window: *Window, rect: Rect, outer_gap: i32) void {
+    window.unbound_move(rect.x + outer_gap, rect.y + outer_gap);
+    window.unbound_resize(@max(0, rect.w), @max(0, rect.h));
+}
+
 pub fn arrange(self: *const Self, output: *Output) !void {
     log.debug("<{*}> arrange windows in output {*}", .{ self, output });
 
@@ -36,75 +48,97 @@ pub fn arrange(self: *const Self, output: *Output) !void {
 
     if (windows.items.len == 0) return;
 
-    const usable_width, const usable_height = blk: {
-        const width = @max(0, output.exclusive_width() - 2 * self.outer_gap);
-        const height = @max(0, output.exclusive_height() - 2 * self.outer_gap);
-        break :blk switch (self.master_location) {
-            .left, .right => .{ width, height },
-            .top, .bottom => .{ height, width },
-        };
-    };
-
-    var master_width: i32 = undefined;
-    var master_height: i32 = undefined;
-    var master_remain: i32 = undefined;
-    var stack_width: i32 = undefined;
-    var stack_height: i32 = undefined;
-    var stack_remain: i32 = undefined;
+    const usable_width = @max(0, output.exclusive_width() - 2 * self.outer_gap);
+    const usable_height = @max(0, output.exclusive_height() - 2 * self.outer_gap);
 
     const window_num: i32 = @intCast(windows.items.len);
     const nmaster = @max(1, @min(window_num, self.nmaster));
     const nstack = window_num - nmaster;
-    if (nstack > 0) {
-        master_width = @intFromFloat(self.mfact * @as(f32, @floatFromInt(usable_width)));
-        master_height = @divFloor(usable_height, nmaster);
-        master_remain = @mod(usable_height, nmaster);
+    const master_num: usize = @intCast(nmaster);
+    const stack_num: usize = @intCast(nstack);
+    const half_gap = @divFloor(self.inner_gap, 2);
 
-        stack_width = usable_width - master_width;
-        stack_height = @divFloor(usable_height, nstack);
-        stack_remain = @mod(usable_height, nstack);
+    const vertical = switch (self.master_location) {
+        .left, .right => true,
+        .top, .bottom => false,
+    };
+
+    var region = Rect{ .x = 0, .y = 0, .w = usable_width, .h = usable_height };
+
+    // master band, split along the first direction
+    if (vertical) {
+        const band_w: i32 = if (nstack > 0)
+            @intFromFloat(self.mfact * @as(f32, @floatFromInt(usable_width)))
+        else
+            usable_width;
+        const master_h = @divFloor(usable_height, nmaster);
+        const master_remain = @mod(usable_height, nmaster);
+        const w = if (nstack > 0) band_w - half_gap else band_w;
+        const x = switch (self.master_location) {
+            .left => 0,
+            .right => if (nstack > 0) usable_width - band_w + half_gap else usable_width - band_w,
+            else => unreachable,
+        };
+        var y: i32 = 0;
+        for (0..master_num) |m| {
+            const h = (master_h + if (m == 0) master_remain else 0) - if (m > 0) self.inner_gap else 0;
+            place(windows.items[m], .{ .x = x, .y = y, .w = w, .h = h }, self.outer_gap);
+            y += h + if (m + 1 < master_num) self.inner_gap else 0;
+        }
+        if (nstack > 0) {
+            region = switch (self.master_location) {
+                .left => .{ .x = band_w + half_gap, .y = 0, .w = usable_width - band_w - half_gap, .h = usable_height },
+                .right => .{ .x = 0, .y = 0, .w = usable_width - band_w - half_gap, .h = usable_height },
+                else => unreachable,
+            };
+        }
     } else {
-        master_width = usable_width;
-        master_height = @divFloor(usable_height, nmaster);
-        master_remain = @mod(usable_height, nmaster);
+        const band_h: i32 = if (nstack > 0)
+            @intFromFloat(self.mfact * @as(f32, @floatFromInt(usable_height)))
+        else
+            usable_height;
+        const master_w = @divFloor(usable_width, nmaster);
+        const master_remain = @mod(usable_width, nmaster);
+        const h = if (nstack > 0) band_h - half_gap else band_h;
+        const y = switch (self.master_location) {
+            .top => 0,
+            .bottom => if (nstack > 0) usable_height - band_h + half_gap else usable_height - band_h,
+            else => unreachable,
+        };
+        var x: i32 = 0;
+        for (0..master_num) |m| {
+            const w = (master_w + if (m == 0) master_remain else 0) - if (m > 0) self.inner_gap else 0;
+            place(windows.items[m], .{ .x = x, .y = y, .w = w, .h = h }, self.outer_gap);
+            x += w + if (m + 1 < master_num) self.inner_gap else 0;
+        }
+        if (nstack > 0) {
+            region = switch (self.master_location) {
+                .top => .{ .x = 0, .y = band_h + half_gap, .w = usable_width, .h = usable_height - band_h - half_gap },
+                .bottom => .{ .x = 0, .y = 0, .w = usable_width, .h = usable_height - band_h - half_gap },
+                else => unreachable,
+            };
+        }
     }
 
-    for (0.., windows.items) |i, window| {
-        var x: i32 = undefined;
-        var y: i32 = undefined;
-        var w: i32 = undefined;
-        var h: i32 = undefined;
-        if (i < nmaster) {
-            x = 0;
-            y = (@as(i32, @intCast(i)) * master_height) + if (i > 0) master_remain + self.inner_gap else 0;
-            w = if (nstack > 0) master_width - @divFloor(self.inner_gap, 2) else master_width;
-            h = (master_height + if (i == 0) master_remain else 0) - if (i > 0) self.inner_gap else 0;
+    // spiral the remaining windows, alternating the split direction
+    var next_vertical = !vertical;
+    for (0..stack_num) |s| {
+        const window = windows.items[master_num + s];
+        if (s == stack_num - 1) {
+            place(window, region, self.outer_gap);
+            break;
+        }
+        if (next_vertical) {
+            const slice = @divFloor(region.w, 2);
+            place(window, .{ .x = region.x, .y = region.y, .w = slice - half_gap, .h = region.h }, self.outer_gap);
+            region.x += slice + half_gap;
+            region.w = @max(0, region.w - slice - half_gap);
         } else {
-            x = master_width + @divFloor(self.inner_gap, 2);
-            y = ((@as(i32, @intCast(i)) - nmaster) * stack_height) + if (i > nmaster) stack_remain + self.inner_gap else 0;
-            w = stack_width - @divFloor(self.inner_gap, 2);
-            h = (stack_height + if (i == nmaster) stack_remain else 0) - if (i > nmaster) self.inner_gap else 0;
+            const slice = @divFloor(region.h, 2);
+            place(window, .{ .x = region.x, .y = region.y, .w = region.w, .h = slice - half_gap }, self.outer_gap);
+            region.y += slice + half_gap;
+            region.h = @max(0, region.h - slice - half_gap);
         }
-        w = @max(0, w);
-        h = @max(0, h);
-
-        switch (self.master_location) {
-            .left => {
-                window.unbound_move(x + self.outer_gap, y + self.outer_gap);
-                window.unbound_resize(w, h);
-            },
-            .right => {
-                window.unbound_move(usable_width - x - w + self.outer_gap, y + self.outer_gap);
-                window.unbound_resize(w, h);
-            },
-            .top => {
-                window.unbound_move(y + self.outer_gap, x + self.outer_gap);
-                window.unbound_resize(h, w);
-            },
-            .bottom => {
-                window.unbound_move(y + self.outer_gap, usable_width - x - w + self.outer_gap);
-                window.unbound_resize(h, w);
-            },
-        }
+        next_vertical = !next_vertical;
     }
 }
