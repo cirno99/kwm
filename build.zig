@@ -80,17 +80,22 @@ pub fn build(b: *std.Build) void {
         }
     };
 
-    const use_llvm = b.option(bool, "llvm", "if to use LLVM compiler and linker");
+    const use_llvm = b.option(bool, "llvm", "if to use LLVM compiler and linker") orelse
+        // GCC 16 emits `.sframe` sections in crt1.o which the self-hosted
+        // linker cannot relocate; default to the LLVM/LLD backend which handles
+        // them.
+        true;
     const pie = b.option(bool, "pie", "if enable pie") orelse false;
     const default_config_path = b.option([]const u8, "config", "path to config file") orelse "config.zon";
     const background_enabled = b.option(bool, "background", "if enable background") orelse false;
     const bar_enabled = b.option(bool, "bar", "if enable bar") orelse true;
     const kwim_enabled = b.option(bool, "kwim", "if to call `kwim` automatically") orelse true;
-
-    const wayland_mod = b.createModule(.{ .root_source_file = scanner.result });
+    const wayland_mod = b.createModule(.{
+        .root_source_file = scanner.result
+    });
     const xkbcommon_mod = b.dependency("xkbcommon", .{}).module("xkbcommon");
     const mvzr_mod = b.dependency("mvzr", .{}).module("mvzr");
-
+    const goose_mod = b.dependency("goose", .{}).module("goose");
     const flags_mod = b.createModule(.{
         .target = target,
         .optimize = optimize,
@@ -149,9 +154,9 @@ pub fn build(b: *std.Build) void {
                         .{ .name = "mvzr", .module = mvzr_mod },
                     },
                 }),
-                .use_llvm = use_llvm,
-                .use_lld = use_llvm,
-            });
+        .use_llvm = use_llvm,
+        .use_lld = use_llvm,
+    });
             const preprocess_run = b.addRunArtifact(preprocess);
             preprocess_run.addArg("-i");
             preprocess_run.addFileArg(config_path);
@@ -192,6 +197,7 @@ pub fn build(b: *std.Build) void {
         const fcft_mod = (b.lazyDependency("fcft", .{}) orelse break :blk).module("fcft");
         kwm_mod.addImport("pixman", pixman_mod);
         kwm_mod.addImport("fcft", fcft_mod);
+        kwm_mod.addImport("goose", goose_mod);
     }
 
     // Here we define an executable. An executable needs to have a root module
@@ -297,10 +303,10 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    const config_tests = b.addTest(.{ .root_module = config_mod });
+    const config_tests = b.addTest(.{ .root_module = config_mod, .use_llvm = use_llvm, .use_lld = use_llvm });
     const run_config_tests = b.addRunArtifact(config_tests);
 
-    const kwm_tests = b.addTest(.{ .root_module = kwm_mod });
+    const kwm_tests = b.addTest(.{ .root_module = kwm_mod, .use_llvm = use_llvm, .use_lld = use_llvm });
     const run_kwm_tests = b.addRunArtifact(kwm_tests);
 
     // Creates an executable that will run `test` blocks from the executable's
@@ -308,6 +314,8 @@ pub fn build(b: *std.Build) void {
     // hence why we have to create two separate ones.
     const exe_tests = b.addTest(.{
         .root_module = exe.root_module,
+        .use_llvm = use_llvm,
+        .use_lld = use_llvm,
     });
 
     // A run step that will run the second test executable.

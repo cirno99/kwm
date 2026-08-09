@@ -137,6 +137,18 @@
             },
         },
 
+        // system tray (StatusNotifierItem)
+        // kwm acts as both the host (displaying icons) and, when no other
+        // process owns the StatusNotifierWatcher name, the watcher itself —
+        // so no external tray/watcher tool (snixembed, waybar, panels) is
+        // needed. Icons appear on the right side of the focused output's bar.
+        .systray = .{
+            .enabled = false,
+            // icon size in logical pixels; 0 means fill the bar height
+            .icon_size = 16,
+            .spacing = 2,
+        },
+
         // override colors
         .override_colors = .{
         // areas:

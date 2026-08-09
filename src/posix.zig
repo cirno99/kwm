@@ -423,3 +423,50 @@ pub fn waitpid(pid: pid_t, flags: u32) !WaitPidResult {
         }
     }
 }
+
+
+pub const EventFdError = error{
+    /// The per-process limit on the number of open file descriptors has been reached.
+    ProcessFdQuotaExceeded,
+    /// The system-wide limit on the total number of open files has been reached.
+    SystemFdQuotaExceeded,
+    /// Insufficient kernel memory was available.
+    SystemResources,
+    /// The kernel version does not support the eventfd2 syscall.
+    Unsupported,
+} || posix.UnexpectedError;
+
+/// eventfd2(2) flags.
+pub const EFD = struct {
+    pub const CLOEXEC: u32 = 0o2000000;
+    pub const NONBLOCK: u32 = 0o4000;
+};
+
+pub fn eventfd(initval: u32, flags: u32) EventFdError!fd_t {
+    const rc = linux.eventfd(initval, flags);
+    return switch (posix.errno(rc)) {
+        .SUCCESS => @intCast(rc),
+        .MFILE => error.ProcessFdQuotaExceeded,
+        .NFILE => error.SystemFdQuotaExceeded,
+        .NOMEM => error.SystemResources,
+        .NOSYS => error.Unsupported,
+        else => |err| posix.unexpectedErrno(err),
+    };
+}
+
+
+/// Resets an eventfd counter to zero and returns whether it was nonzero.
+pub fn eventfd_reset(fd: fd_t) bool {
+    var counter: u64 = 0;
+    const nbytes = posix.read(fd, std.mem.asBytes(&counter)) catch return false;
+    return nbytes == @sizeOf(u64) and counter != 0;
+}
+
+
+/// Increments the eventfd counter to wake up a poller.
+pub fn eventfd_notify(fd: fd_t) void {
+    var counter: u64 = 1;
+    const bytes = mem.asBytes(&counter);
+    _ = linux.write(fd, bytes.ptr, bytes.len);
+}
+

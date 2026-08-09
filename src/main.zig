@@ -1,3 +1,7 @@
+pub const std_options: std.Options = .{
+    .log_level = .debug,
+};
+
 const build_options = @import("build_options");
 const builtins = @import("builtin");
 const std = @import("std");

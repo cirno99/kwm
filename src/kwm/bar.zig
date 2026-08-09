@@ -19,6 +19,7 @@ const utils = @import("utils.zig");
 const types = @import("types.zig");
 const render_ = @import("render.zig");
 const binding = @import("binding.zig");
+const systray = @import("systray.zig");
 const Context = @import("context.zig");
 const Seat = @import("seat.zig");
 const Output = @import("output.zig");
@@ -239,6 +240,7 @@ pub fn handle_click(self: *Self, seat: *Seat) void {
     }
 
     x -= self.static_component_width();
+
     inline for (0.., &[_]types.BarArea{ .mode, .layout }) |i, area_type| {
         if (ctx.cfg.bar.get(area_type)) |area| {
             if (x <= self.dynamic_splits.items[i]) {
@@ -285,6 +287,18 @@ pub fn handle_click(self: *Self, seat: *Seat) void {
             action = area.click.getter.get(seat.button) orelse return;
         }
     }
+}
+
+/// Physical icon target height for the tray on this bar.
+fn tray_target_height(self: *const Self) u32 {
+    const bar_height = self.height(false);
+    const cfg_size: u32 = ctx.cfg.bar.systray.icon_size;
+    var target: i32 = if (cfg_size == 0)
+        bar_height
+    else
+        utils.logical2physics(i32, @as(i32, @intCast(cfg_size)), self.scale);
+    target = @max(@min(target, bar_height), 1);
+    return @intCast(target);
 }
 
 pub fn handle_axis(self: *Self, seat: *Seat, discrete: i32) void {
@@ -631,6 +645,19 @@ fn render_dynamic_component(self: *Self) void {
     const bw: u16 = @intCast(@min(width, @as(i32, std.math.maxInt(u16))));
     const bh: u16 = @intCast(@min(self.height(false), @as(i32, std.math.maxInt(u16))));
 
+    // Reserve space for the system tray on the right side of the focused
+    // output's bar. The tray strip is produced by the systray dbus thread.
+    var tray_snapshot: ?*systray.Snapshot = null;
+    defer if (tray_snapshot) |snap| snap.unref();
+    var tray_width: i32 = 0;
+    if (self.output == ctx.current_output and ctx.cfg.bar.systray.enabled and systray.is_running()) {
+        systray.update_bar_size(self.tray_target_height());
+        if (systray.snapshot()) |snap| {
+            tray_snapshot = snap;
+            tray_width = snap.width;
+        }
+    }
+
     const buffer = self.next_buffer(.dynamic, bw, bh) orelse return;
 
     var bg_rect = [_]pixman.Rectangle16{
@@ -931,7 +958,7 @@ fn render_dynamic_component(self: *Self) void {
     const total_right_width = total_button_width + total_status_width;
     const right_block_x: i16 = @intCast(@max(
         left_content_end,
-        @as(i32, bw) -| total_right_width -| pad,
+        @as(i32, bw) -| tray_width -| total_right_width -| pad,
     ));
 
     // render pass
@@ -985,6 +1012,27 @@ fn render_dynamic_component(self: *Self) void {
         for (status_datas.items) |d| {
             const cc, const text = d;
             sx += self.font.render_text(buffer, text, &cc, sx, y);
+        }
+    }
+
+    if (tray_snapshot) |snap| {
+        if (snap.strip) |strip| {
+            const strip_x: i32 = @as(i32, bw) - snap.width;
+            const strip_y: i32 = @divFloor(@as(i32, bh) - snap.height, 2);
+            pixman.Image.composite32(
+                .over,
+                strip,
+                null,
+                buffer.image,
+                0,
+                0,
+                0,
+                0,
+                strip_x,
+                strip_y,
+                @as(u16, @intCast(snap.width)),
+                @as(u16, @intCast(snap.height)),
+            );
         }
     }
 

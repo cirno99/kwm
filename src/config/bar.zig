@@ -109,6 +109,13 @@ status: ?struct {
     ),
 },
 
+systray: struct {
+    enabled: bool,
+    // icon size in logical pixels; 0 means fill the bar height
+    icon_size: u16,
+    spacing: u16,
+},
+
 override_colors: []const struct {
     area: BarArea,
     scheme: meta.make_fields_optional(Scheme),

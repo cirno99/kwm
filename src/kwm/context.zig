@@ -26,6 +26,7 @@ const Output = @import("output.zig");
 const Window = @import("window.zig");
 const KeyRepeat = @import("key_repeat.zig");
 const ShellSurface = @import("shell_surface.zig");
+const systray = if (build_options.bar_enabled) @import("systray.zig") else void;
 
 var ctx: Self = undefined;
 var inited: bool = false;
@@ -161,6 +162,10 @@ pub fn init(
 
     rwm.setListener(*Self, rwm_listener, &ctx);
 
+    if (comptime build_options.bar_enabled) {
+        systray.init();
+    }
+
     inited = true;
 }
 
@@ -172,6 +177,7 @@ pub fn deinit() void {
 
     if (comptime build_options.bar_enabled) {
         @import("fcft").fini();
+        systray.deinit();
     }
 
     ctx.wl_registry.destroy();
@@ -309,6 +315,10 @@ pub fn reload_config(self: *Self) void {
         if (mask.bar) {
             self.stop_listening_status();
 
+            if (self.cfg.bar.systray.enabled) {
+                systray.init();
+            }
+
             var it = self.outputs.safeIterator(.forward);
             while (it.next()) |output| {
                 output.bar.reload_font();
@@ -419,6 +429,15 @@ pub fn update_bar_status(self: *Self) void {
             }
         } else {
             log.warn("call `update_bar_status` while bar_status_fd is null", .{});
+        }
+    } else unreachable;
+}
+
+pub fn update_systray(self: *Self) void {
+    if (comptime build_options.bar_enabled) {
+        if (self.current_output) |output| {
+            output.bar.damage(.status);
+            output.bar.render_damaged();
         }
     } else unreachable;
 }

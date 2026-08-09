@@ -54,6 +54,10 @@
             .hash = "pixman-0.3.0-LClMnz2VAAAs7QSCGwLimV5VUYx0JFnX5xWU6HwtMuDX",
             .lazy = true,
         },
+        .goose = .{
+            .url = "https://github.com/luxluth/goose/archive/refs/tags/v2.0.0.tar.gz",
+            .hash = "goose-2.0.0-e9MzMLIWAwBBJ1LmB8bFKZ22LY5Bw27Yt0flH0QgH3G2",
+        },
     },
     .paths = .{
         "build.zig",

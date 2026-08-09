@@ -12,12 +12,14 @@ const types = @import("kwm/types.zig");
 const binding = @import("kwm/binding.zig");
 const Window = @import("kwm/window.zig");
 const Context = @import("kwm/context.zig");
+const systray = if (build_options.bar_enabled) @import("kwm/systray.zig") else void;
 
 const FDType = enum {
     wayland,
     signal,
     bar_status,
     key_repeat,
+    systray,
 };
 
 pub const Layout = @import("kwm/layout.zig");
@@ -36,6 +38,9 @@ pub const deinit = Context.deinit;
 test {
     _ = @import("kwm/utils.zig");
     _ = @import("kwm/render/utils.zig");
+    if (build_options.bar_enabled) {
+        _ = @import("kwm/systray.zig");
+    }
 }
 
 pub fn run(wl_display: *wl.Display) !void {
@@ -83,6 +88,13 @@ pub fn run(wl_display: *wl.Display) !void {
             }
         }
 
+        if (comptime build_options.bar_enabled) {
+            if (systray.is_running()) {
+                try poll_fds.appendBounded(.{ .fd = systray.wake_fd, .events = posix.POLL.IN, .revents = 0 });
+                try fd_types.appendBounded(.systray);
+            }
+        }
+
         switch (wl_display.flush()) {
             .SUCCESS, .AGAIN => {},
             else => |err| {
@@ -101,6 +113,7 @@ pub fn run(wl_display: *wl.Display) !void {
                     ctx.stop_listening_status();
                     continue;
                 },
+                .systray => continue,
             };
             if (poll_fd.revents & posix.POLL.IN != 0) {
                 switch (fd_type) {
@@ -117,6 +130,12 @@ pub fn run(wl_display: *wl.Display) !void {
                     .key_repeat => {
                         const count = try read(u64, poll_fd.fd) orelse continue;
                         ctx.key_repeat.?.repeat(count);
+                    },
+                    .systray => {
+                        if (comptime build_options.bar_enabled) {
+                            _ = posix.eventfd_reset(poll_fd.fd);
+                            ctx.update_systray();
+                        } else unreachable;
                     },
                 }
             }
