@@ -192,16 +192,32 @@ pub fn deinit() void {
 fn dbus_thread() void {
     log.info("systray thread started", .{});
 
-    var conn = goose.Connection.init(ctx.gpa, .Session, ctx.io, &ctx.env) catch |err| {
-        log.err("connect to session bus failed: {}", .{err});
-        running.store(false, .release);
-        return;
-    };
-    sig_ctx = .{ .conn = &conn };
+    while (running.load(.acquire)) {
+        var conn = goose.Connection.init(ctx.gpa, .Session, ctx.io, &ctx.env) catch |err| {
+            log.warn("systray connect to session bus failed: {}", .{err});
+            reset_state();
+            retry_delay();
+            continue;
+        };
+        const reconnect = serve_bus(&conn);
+        conn.close();
+        if (!reconnect) break;
+        reset_state();
+        retry_delay();
+    }
 
-    is_watcher = claim_watcher_name(&conn);
-    if (is_watcher) register_self_as_host(&conn);
-    setup_subs(&conn);
+    log.info("systray thread stopped", .{});
+}
+
+/// Runs one session-bus connection until it dies or the thread is asked to
+/// stop. Returns `true` when the connection was lost and should be retried,
+/// `false` when deinit was requested and the thread should exit.
+fn serve_bus(conn: *goose.Connection) bool {
+    sig_ctx = .{ .conn = conn };
+
+    is_watcher = claim_watcher_name(conn);
+    if (is_watcher) register_self_as_host(conn);
+    setup_subs(conn);
     publish();
 
     var poll_fds = [_]posix.pollfd{
@@ -223,20 +239,42 @@ fn dbus_thread() void {
         if (poll_fds[0].revents & (posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR) != 0) {
             const msg = conn.waitMessage() catch |err| {
                 log.warn("systray waitMessage failed: {}", .{err});
-                if (err == error.EndOfStream or err == error.ConnectionResetByPeer) break;
+                if (err == error.EndOfStream or err == error.ConnectionResetByPeer) return true;
                 continue;
             };
             if (msg.header.message_type == .Signal) {
                 dispatch_signal(msg);
             } else if (is_watcher and msg.header.message_type == .MethodCall) {
-                handle_watcher_call(&conn, msg);
+                handle_watcher_call(conn, msg);
             }
             conn.freeMessage(@constCast(&msg));
         }
     }
+    return false;
+}
 
-    log.info("systray thread stopped", .{});
-    conn.close();
+fn retry_delay() void {
+    if (!running.load(.acquire)) return;
+    const delay = posix.system.timespec{ .sec = 0, .nsec = 500 * std.time.ns_per_ms };
+    _ = posix.system.nanosleep(&delay, null);
+}
+
+/// Drops all in-memory tray state so a fresh connection re-enumerates from
+/// scratch. Called on the dbus thread between connection attempts.
+fn reset_state() void {
+    for (items.items) |it| item_unref(it);
+    items.clearRetainingCapacity();
+
+    for (registered_hosts.items) |h| ctx.gpa.free(h);
+    registered_hosts.clearRetainingCapacity();
+    is_watcher = false;
+
+    snapshot_mutex.lockUncancelable(ctx.io);
+    defer snapshot_mutex.unlock(ctx.io);
+    if (current_snapshot) |old| {
+        old.unref();
+        current_snapshot = null;
+    }
 }
 
 fn setup_subs(c: *goose.Connection) void {
@@ -494,6 +532,20 @@ fn handle_watcher_register_item(c: *goose.Connection, msg: Message, service: []c
     // Reply promptly so the registering app is not kept waiting.
     reply_void(c, msg);
     log.debug("watcher: item registered: {s}", .{service});
+
+    // Ayatana-style registration passes a bare object path; the object then
+    // lives on the caller's own connection, so resolve the destination from
+    // the message sender.
+    if (mem.startsWith(u8, service, "/")) {
+        if (msg_sender(msg)) |sender| {
+            const combined = std.fmt.allocPrint(ctx.gpa, "{s}{s}", .{ sender, service }) catch return;
+            defer ctx.gpa.free(combined);
+            add_item(c, combined);
+            emit_watcher_signal(c, "StatusNotifierItemRegistered", service);
+        }
+        return;
+    }
+
     add_item(c, service);
     emit_watcher_signal(c, "StatusNotifierItemRegistered", service);
 }
@@ -666,6 +718,15 @@ fn add_item(c: *goose.Connection, service: []const u8) void {
     const slash = mem.indexOfScalar(u8, service, '/');
     const dest = if (slash) |s| service[0..s] else service;
     const explicit_path = if (slash) |s| service[s..] else null;
+
+    // Ayatana-style registrations pass a bare object path that lives on the
+    // caller's own connection; without the caller's bus name there is nothing
+    // to address. Making a method call with an empty destination is a protocol
+    // violation that makes the daemon drop the whole connection, so skip.
+    if (dest.len == 0) {
+        log.debug("systray: item registered without a bus name ({s})", .{service});
+        return;
+    }
 
     for (items.items) |it| {
         if (mem.eql(u8, it.dest, dest)) return; // already present
