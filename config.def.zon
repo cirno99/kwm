@@ -147,6 +147,15 @@
             // icon size in logical pixels; 0 means fill the bar height
             .icon_size = 16,
             .spacing = 2,
+            // button -> item action:
+            //      .activate: show the item's window
+            //      .context_menu: pop up the item's context menu
+            //      .secondary_activate: alternate action (e.g. a browse window)
+            .click = .{
+                .left = .activate,
+                .right = .context_menu,
+                .middle = .secondary_activate,
+            },
         },
 
         // override colors

@@ -241,6 +241,8 @@ pub fn handle_click(self: *Self, seat: *Seat) void {
 
     x -= self.static_component_width();
 
+    if (self.handle_tray_click(seat, x)) return;
+
     inline for (0.., &[_]types.BarArea{ .mode, .layout }) |i, area_type| {
         if (ctx.cfg.bar.get(area_type)) |area| {
             if (x <= self.dynamic_splits.items[i]) {
@@ -287,6 +289,42 @@ pub fn handle_click(self: *Self, seat: *Seat) void {
             action = area.click.getter.get(seat.button) orelse return;
         }
     }
+}
+
+/// Resolves a click inside the dynamic component to a tray icon and forwards it
+/// to the systray module. Returns `true` when the click was consumed by the
+/// tray region, so `handle_click` skips the remaining bar areas.
+fn handle_tray_click(self: *Self, seat: *Seat, x: i32) bool {
+    if (!ctx.cfg.bar.systray.enabled) return false;
+    if (self.output != ctx.current_output) return false;
+    if (!systray.is_running()) return false;
+    const snap = systray.snapshot() orelse return false;
+    defer snap.unref();
+    if (snap.width <= 0) return false;
+
+    // The strip is rendered right-aligned in the dynamic component and
+    // vertically centered in the bar.
+    const bw = utils.logical2physics(i32, self.output.width, self.scale) - self.static_component_width();
+    const strip_x = bw - snap.width;
+    if (x < strip_x) return false;
+
+    const bar_top_logical = switch (ctx.cfg.bar.position) {
+        .top => self.output.y,
+        .bottom => self.output.y + self.output.height - self.height(true),
+    };
+    const rel_y = utils.logical2physics(i32, seat.pointer_position.y, self.scale) -
+        utils.logical2physics(i32, bar_top_logical, self.scale);
+    const strip_y = @divFloor(self.height(false) - snap.height, 2);
+    if (rel_y < strip_y or rel_y >= strip_y + snap.height) return false;
+
+    for (snap.regions) |region| {
+        if (x >= strip_x + region.x and x < strip_x + region.x + region.width) {
+            const action = ctx.cfg.bar.systray.click.getter.get(seat.button) orelse return true;
+            systray.click(region.owner, action, seat.pointer_position.x, seat.pointer_position.y);
+            return true;
+        }
+    }
+    return true;
 }
 
 /// Physical icon target height for the tray on this bar.

@@ -61,3 +61,9 @@ pub const WindowIterSkip = enum {
     floating,
     nonfloating,
 };
+
+pub const SystrayAction = enum {
+    activate,
+    context_menu,
+    secondary_activate,
+};

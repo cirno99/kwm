@@ -21,6 +21,7 @@ const flate = std.compress.flate;
 
 const pixman = @import("pixman");
 const posix = @import("posix");
+const types = @import("types.zig");
 const render_utils = @import("render/utils.zig");
 const Context = @import("context.zig");
 
@@ -30,6 +31,17 @@ const ctx = Context.get();
 // Shared snapshot (owned by the dbus thread, consumed by the main thread).
 // ---------------------------------------------------------------------------
 
+/// Hit region of a single tray icon inside the strip, so the main thread can
+/// resolve a bar click to the item it belongs to.
+pub const IconRegion = struct {
+    /// Left edge of the icon within the strip (physical pixels).
+    x: i32,
+    /// Icon width (physical pixels).
+    width: i32,
+    /// Unique bus name of the owning item, used to address click calls.
+    owner: [:0]u8,
+};
+
 pub const Snapshot = struct {
     refs: std.atomic.Value(u32) = std.atomic.Value(u32).init(1),
     /// Composited tray strip at the target icon height, or null when empty.
@@ -38,6 +50,8 @@ pub const Snapshot = struct {
     width: i32,
     /// Physical height of the strip (== the icon target height).
     height: i32,
+    /// Hit regions for each rendered icon, left to right.
+    regions: []IconRegion,
 
     pub fn ref(self: *Snapshot) void {
         _ = self.refs.fetchAdd(1, .monotonic);
@@ -46,6 +60,8 @@ pub const Snapshot = struct {
     pub fn unref(self: *Snapshot) void {
         if (self.refs.fetchSub(1, .acq_rel) == 1) {
             if (self.strip) |image| _ = image.unref();
+            for (self.regions) |r| ctx.gpa.free(r.owner);
+            ctx.gpa.free(self.regions);
             ctx.gpa.destroy(self);
         }
     }
@@ -112,6 +128,20 @@ var request_fd: posix.fd_t = -1;
 /// state, and the eventfd only exists to nudge the poll loop.
 var posted_height: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
+/// A click on a tray icon, forwarded from the main thread to the dbus thread
+/// which owns the item registry and the D-Bus connection.
+const ClickRequest = struct {
+    /// Unique bus name of the target item.
+    owner: [:0]u8,
+    action: types.SystrayAction,
+    /// Global logical pointer position of the click.
+    x: i32,
+    y: i32,
+};
+
+var pending_clicks: std.ArrayList(ClickRequest) = .empty;
+var pending_clicks_mutex: std.Io.Mutex = .init;
+
 var snapshot_mutex: std.Io.Mutex = .init;
 var current_snapshot: ?*Snapshot = null;
 
@@ -146,6 +176,27 @@ pub fn update_bar_size(height: u32) void {
     if (height == 0 or height == posted_height.load(.monotonic)) return;
     posted_height.store(height, .monotonic);
     if (request_fd >= 0) posix.eventfd_notify(request_fd);
+}
+
+/// Forwards a tray icon click to the dbus thread, which performs the matching
+/// D-Bus method call on the item. `x`/`y` are the global logical pointer
+/// position; SNI items use them to place windows/menus.
+pub fn click(owner: []const u8, action: types.SystrayAction, x: i32, y: i32) void {
+    if (request_fd < 0) return;
+
+    const req = ClickRequest{
+        .owner = ctx.gpa.dupeZ(u8, owner) catch return,
+        .action = action,
+        .x = x,
+        .y = y,
+    };
+    pending_clicks_mutex.lockUncancelable(ctx.io);
+    defer pending_clicks_mutex.unlock(ctx.io);
+    pending_clicks.append(ctx.gpa, req) catch {
+        ctx.gpa.free(req.owner);
+        return;
+    };
+    posix.eventfd_notify(request_fd);
 }
 
 pub fn init() void {
@@ -706,6 +757,78 @@ fn drain_requests() void {
         log.debug("target icon height set to {}", .{target_height});
         publish();
     }
+
+    drain_clicks();
+}
+
+/// Processes icon clicks queued by the main thread. The queue is swapped out
+/// under the lock so the item registry and D-Bus connection are only touched
+/// after the lock is released (click dispatch may synchronously receive
+/// signals that mutate `items`).
+fn drain_clicks() void {
+    pending_clicks_mutex.lockUncancelable(ctx.io);
+    const requests = pending_clicks.items;
+    pending_clicks.clearRetainingCapacity();
+    pending_clicks_mutex.unlock(ctx.io);
+
+    for (requests) |req| {
+        defer ctx.gpa.free(req.owner);
+        process_click(req);
+    }
+}
+
+fn process_click(req: ClickRequest) void {
+    const it = find_item_by_owner(req.owner) orelse {
+        log.debug("systray click for unknown item {s}, ignoring", .{req.owner});
+        return;
+    };
+    const member = switch (req.action) {
+        .activate => "Activate",
+        .context_menu => "ContextMenu",
+        .secondary_activate => "SecondaryActivate",
+    };
+    log.debug("systray click: {s} -> {s} at ({}, {})", .{ member, it.owner, req.x, req.y });
+    send_item_method(sig_ctx.conn, it, member, req.x, req.y);
+}
+
+fn find_item_by_owner(owner: []const u8) ?*Item {
+    for (items.items) |it| {
+        if (mem.eql(u8, it.owner, owner)) return it;
+    }
+    return null;
+}
+
+/// Sends a fire-and-forget method call to the item. SNI click methods take two
+/// int32 coordinates; the item positions its own window/menu at them.
+fn send_item_method(c: *goose.Connection, it: *Item, member: []const u8, x: i32, y: i32) void {
+    var enc = BodyEncoder.encode(ctx.gpa, .{ x, y }) catch return;
+    defer enc.deinit();
+
+    const member_z = ctx.gpa.dupeZ(u8, member) catch return;
+    defer ctx.gpa.free(member_z);
+
+    var fields = std.ArrayList(HeaderField).empty;
+    defer fields.deinit(ctx.gpa);
+    fields.append(ctx.gpa, .{ .code = .Destination, .value = .{ .Destination = it.owner } }) catch return;
+    fields.append(ctx.gpa, .{ .code = .Path, .value = .{ .Path = it.path } }) catch return;
+    fields.append(ctx.gpa, .{ .code = .Interface, .value = .{ .Interface = "org.kde.StatusNotifierItem" } }) catch return;
+    fields.append(ctx.gpa, .{ .code = .Member, .value = .{ .Member = member_z } }) catch return;
+    fields.append(ctx.gpa, .{ .code = .Signature, .value = .{ .Signature = enc.signature() } }) catch return;
+
+    fire_serial +%= 1;
+    const header = MessageHeader{
+        .message_type = .MethodCall,
+        // The click methods return void and we don't match on replies, so ask
+        // the item not to send one.
+        .flags = @intFromEnum(core.MessageFlag.NoReplyExpected),
+        .proto_version = 1,
+        .body_length = @intCast(enc.body().len),
+        .serial = fire_serial,
+        .header_fields = fields.items,
+    };
+    c.sendMessage(Message.new(header, enc.body())) catch |err| {
+        log.debug("send {s} to {s} failed: {}", .{ member, it.owner, err });
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -1298,6 +1421,9 @@ fn build_snapshot() ?*Snapshot {
     const total: i32 = if (count > 0) @intCast(@as(i64, @intCast(count)) * @as(i64, target + spacing) - @as(i64, spacing)) else 0;
     log.debug("systray snapshot: {} icons, width {}, target {}", .{ count, total, target });
 
+    var regions = std.ArrayList(IconRegion).empty;
+    defer regions.deinit(ctx.gpa);
+
     const strip: ?*pixman.Image = if (total > 0) blk: {
         const image = pixman.Image.createBits(.a8r8g8b8, total, target, null, 0) orelse return null;
         errdefer _ = image.unref();
@@ -1326,16 +1452,30 @@ fn build_snapshot() ?*Snapshot {
             };
 
             pixman.Image.composite32(.over, scaled, null, image, 0, 0, 0, 0, x, 0, target, target);
+
+            const owner = ctx.gpa.dupeZ(u8, it.owner) catch continue;
+            regions.append(ctx.gpa, .{ .x = x, .width = target, .owner = owner }) catch {
+                ctx.gpa.free(owner);
+                continue;
+            };
             x += target + spacing;
         }
         break :blk image;
     } else null;
+
+    const owned_regions = ctx.gpa.alloc(IconRegion, regions.items.len) catch return null;
+    errdefer {
+        for (owned_regions) |r| ctx.gpa.free(r.owner);
+        ctx.gpa.free(owned_regions);
+    }
+    for (regions.items, 0..) |r, i| owned_regions[i] = r;
 
     const snap = ctx.gpa.create(Snapshot) catch return null;
     snap.* = .{
         .strip = strip,
         .width = total,
         .height = @intCast(target),
+        .regions = owned_regions,
     };
     return snap;
 }

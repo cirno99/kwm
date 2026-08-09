@@ -30,6 +30,7 @@ pub const XkbBindingEvent = binding.XkbBinding.Event;
 pub const PointerBindingEvent = binding.PointerBinding.Event;
 pub const WindowDecoration = Window.Decoration;
 pub const Button = types.Button;
+pub const SystrayAction = types.SystrayAction;
 
 const ctx = Context.get();
 pub const init = Context.init;

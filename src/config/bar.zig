@@ -114,6 +114,10 @@ systray: struct {
     // icon size in logical pixels; 0 means fill the bar height
     icon_size: u16,
     spacing: u16,
+    click: meta.enum_struct(
+        kwm.Button,
+        ?kwm.SystrayAction
+    ),
 },
 
 override_colors: []const struct {
