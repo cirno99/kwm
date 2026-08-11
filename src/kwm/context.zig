@@ -1306,18 +1306,19 @@ fn prepare_manage(self: *Self) void {
             }
         }
 
-        var flag = true;
-        var output_it = self.outputs.safeIterator(.forward);
-        while (flag) {
-            const output = output_it.next() orelse blk: {
-                flag = false;
-                break :blk current_output;
-            };
-            var window_it = self.windows.safeIterator(.forward);
-            while (window_it.next()) |window| {
-                if (window.sticky or window.tag & output.tag != 0) {
-                    window.set_output(output, false);
+        // Reassign every window to the output whose tag it matches, preferring
+        // the current output on ties so its windows are never displaced.
+        var window_it = self.windows.safeIterator(.forward);
+        while (window_it.next()) |window| {
+            if (!window.sticky and window.tag & current_output.tag == 0) {
+                var output_it = self.outputs.safeIterator(.forward);
+                while (output_it.next()) |output| {
+                    if (window.tag & output.tag != 0) {
+                        window.set_output(output, false);
+                    }
                 }
+            } else {
+                window.set_output(current_output, false);
             }
         }
     }
@@ -1325,6 +1326,10 @@ fn prepare_manage(self: *Self) void {
 
 fn render_windows(self: *Self) void {
     const focused = self.focused_window();
+    const border_width = self.cfg.border.width;
+    const focus_color = self.cfg.border.color.focus;
+    const unfocus_color = self.cfg.border.color.unfocus;
+    const exclusive_focus = self.focus_exclusive();
 
     {
         var it = self.windows.safeIterator(.forward);
@@ -1332,10 +1337,10 @@ fn render_windows(self: *Self) void {
             if (!window.is_visible()) {
                 window.hide();
             } else {
-                window.set_border(if (window.fullscreen == .output) 0 else self.cfg.border.width, if (!self.focus_exclusive() and window == focused)
-                    self.cfg.border.color.focus
-                else
-                    self.cfg.border.color.unfocus);
+                window.set_border(
+                    if (window.fullscreen == .output) 0 else border_width,
+                    if (!exclusive_focus and window == focused) focus_color else unfocus_color,
+                );
             }
 
             window.render();

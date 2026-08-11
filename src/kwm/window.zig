@@ -871,14 +871,16 @@ pub fn manage(self: *Self) void {
 pub fn render(self: *Self) void {
     defer self.hidden = false;
 
+    const border_width = ctx.cfg.border.width;
+
     if (
         self.hidden
         or self.output == null
         or self.geometry_undefined
-        or self.x - ctx.cfg.border.width >= self.output.?.width
-        or self.x + self.width + ctx.cfg.border.width <= 0
-        or self.y - ctx.cfg.border.width >= self.output.?.height
-        or self.y + self.height + ctx.cfg.border.width <= 0
+        or self.x - border_width >= self.output.?.width
+        or self.x + self.width + border_width <= 0
+        or self.y - border_width >= self.output.?.height
+        or self.y + self.height + border_width <= 0
     ) {
         if (!self.hidden and !self.geometry_undefined)
             log.debug("<{*}> out of range, hide", .{ self });
@@ -893,23 +895,25 @@ pub fn render(self: *Self) void {
         return;
     }
 
+    const output = self.output.?;
+    const output_x = output.exclusive_x();
+    const output_y = output.exclusive_y();
+
     var offset_x: i32 = 0;
     var offset_y: i32 = 0;
-    const output_x = self.output.?.exclusive_x();
-    const output_y = self.output.?.exclusive_y();
 
     if (self.swallowing_border) |*border| {
         border.render(ctx.cfg.border.color.swallowing);
         if (self.managed_by_layout()) {
-            offset_x += ctx.cfg.border.width;
-            offset_y += ctx.cfg.border.width;
+            offset_x += border_width;
+            offset_y += border_width;
         }
     }
 
     if (self.maximize) {
         log.debug("<{*}> rendering maximize", .{ self });
-        offset_x += ctx.cfg.border.width;
-        offset_y += ctx.cfg.border.width;
+        offset_x += border_width;
+        offset_y += border_width;
         const px = output_x + offset_x;
         const py = output_y + offset_y;
         if (self.last_render_pos.x != px or self.last_render_pos.y != py) {
@@ -936,20 +940,20 @@ pub fn render(self: *Self) void {
         self.last_render_pos = .{ .x = px, .y = py };
     }
 
-    var left = self.x - ctx.cfg.border.width;
-    var right = self.x + self.width + ctx.cfg.border.width;
-    var top = self.y - ctx.cfg.border.width;
-    var bottom = self.y + self.height + ctx.cfg.border.width;
+    var left = self.x - border_width;
+    var right = self.x + self.width + border_width;
+    var top = self.y - border_width;
+    var bottom = self.y + self.height + border_width;
     if (
         left < 0
         or top < 0
-        or right > self.output.?.width
-        or bottom > self.output.?.height
+        or right > output.width
+        or bottom > output.height
     ) {
         left = @max(left, 0);
-        right = @min(right, self.output.?.width);
+        right = @min(right, output.width);
         top = @max(top, 0);
-        bottom = @min(bottom, self.output.?.height);
+        bottom = @min(bottom, output.height);
         self.rwm_window.setClipBox(left-self.x-offset_x, top-self.y-offset_y, right-left, bottom-top);
         self.clip_state = .cliped;
     } else if (self.clip_state != .normal){

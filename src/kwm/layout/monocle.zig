@@ -16,8 +16,8 @@ pub fn arrange(self: *const Self, output: *Output) !void {
     log.debug("<{*}> arrange windows in output {*}", .{ self, output });
 
     const focus_top = ctx.focus_top_in(output, true) orelse return;
-    const available_width = output.exclusive_width() - 2*self.gap;
-    const available_height = output.exclusive_height() - 2*self.gap;
+    const available_width = @max(0, output.exclusive_width() - 2 * self.gap);
+    const available_height = @max(0, output.exclusive_height() - 2 * self.gap);
     {
         var it = ctx.windows.safeIterator(.forward);
         while (it.next()) |window| {
