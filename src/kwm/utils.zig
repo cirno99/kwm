@@ -90,11 +90,13 @@ pub fn shift_tag(base: u32, mask: u32, len: usize, direction: types.Direction) u
 
 
 pub fn rgba(color: u32) struct { r: u32, g: u32, b: u32, a: u32 } {
+    const channel_scale = comptime @as(u32, std.math.maxInt(u32) / std.math.maxInt(u8));
+
     return .{
-        .r = @as(u32, (color >> 24) & 0xFF) * (0xFFFF_FFFF / 0xFF),
-        .g = @as(u32, (color >> 16) & 0xFF) * (0xFFFF_FFFF / 0xFF),
-        .b = @as(u32, (color >> 8) & 0xFF) * (0xFFFF_FFFF / 0xFF),
-        .a = @as(u32, (color >> 0) & 0xFF) * (0xFFFF_FFFF / 0xFF),
+        .r = @as(u32, (color >> 24) & 0xFF) * channel_scale,
+        .g = @as(u32, (color >> 16) & 0xFF) * channel_scale,
+        .b = @as(u32, (color >> 8) & 0xFF) * channel_scale,
+        .a = @as(u32, (color >> 0) & 0xFF) * channel_scale,
     };
 }
 
@@ -152,16 +154,12 @@ pub fn expand_env_str(
         var part: []const u8 = undefined;
         if (match == null or i < match.?.start) {
             const end = if (match) |m| m.start else str.len;
-            defer i = end;
-
             part = str[i..end];
+            i = end;
         } else if (i == match.?.start) {
-            defer {
-                i += match.?.slice.len;
-                match = it.next();
-            }
-
             part = ctx.env.get(match.?.slice[2..match.?.slice.len-1]) orelse match.?.slice;
+            i += match.?.slice.len;
+            match = it.next();
         } else unreachable;
         try result.appendSlice(ctx.gpa, part);
     }

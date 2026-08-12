@@ -60,6 +60,22 @@ const Event = union(enum) {
     resize: ResizeState,
 };
 
+pub const MoveData = struct {
+    start_x: i32,
+    start_y: i32,
+    origin_output: *Output,
+    seat: *Seat,
+};
+pub const ResizeData = struct {
+    start_x: i32,
+    start_y: i32,
+    start_width: i32,
+    start_height: i32,
+    start_mfact: f32,
+    direction: ResizeDirection,
+    seat: *Seat,
+};
+
 const ctx = Context.get();
 
 
@@ -141,21 +157,8 @@ floating_geometry: ?struct {
 minimized: bool = false,
 operator: union(enum) {
     none,
-    move: struct {
-        start_x: i32,
-        start_y: i32,
-        origin_output: *Output,
-        seat: *Seat,
-    },
-    resize: struct {
-        start_x: i32,
-        start_y: i32,
-        start_width: i32,
-        start_height: i32,
-        start_mfact: f32,
-        direction: ResizeDirection,
-        seat: *Seat,
-    },
+    move: MoveData,
+    resize: ResizeData,
 } = .none,
 
 

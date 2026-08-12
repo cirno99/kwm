@@ -1274,6 +1274,18 @@ fn promote_new_seat(self: *Self) void {
     self.set_current_seat(if (current_seat == former_seat) null else current_seat);
 }
 
+// Collects the tiled windows visible on `output` into the shared
+// `layout_windows` buffer, clearing it first. Used by the layouts to avoid
+// re-implementing the same scan.
+pub fn collect_layout_windows(self: *Self, output: *Output) !void {
+    self.layout_windows.clearRetainingCapacity();
+    var it = self.windows.safeIterator(.forward);
+    while (it.next()) |window| {
+        if (!window.is_visible_in(output) or window.floating) continue;
+        try self.layout_windows.append(self.gpa, window);
+    }
+}
+
 fn prepare_manage(self: *Self) void {
     log.debug("prepare to manage", .{});
 

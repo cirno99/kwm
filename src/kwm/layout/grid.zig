@@ -21,15 +21,8 @@ direction: Direction,
 pub fn arrange(self: *const Self, output: *Output) !void {
     log.debug("<{*}> arrange windows in output {*}", .{ self, output });
 
-    var windows = &ctx.layout_windows;
-    windows.clearRetainingCapacity();
-    {
-        var it = ctx.windows.safeIterator(.forward);
-        while (it.next()) |window| {
-            if (!window.is_visible_in(output) or window.floating) continue;
-            try windows.append(ctx.gpa, window);
-        }
-    }
+    const windows = &ctx.layout_windows;
+    try ctx.collect_layout_windows(output);
 
     if (windows.items.len == 0) return;
 

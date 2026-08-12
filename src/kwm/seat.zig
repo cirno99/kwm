@@ -909,7 +909,7 @@ fn window_interaction(self: *Self, window: *Window) void {
 // the resized window and its neighbors are recomputed by `arrange`. The sign is
 // derived from the master location so the master's dragged edge follows the
 // pointer.
-fn resize_tiled(window: *Window, op_data: anytype, new_width: ?i32, new_height: ?i32) void {
+fn resize_tiled(window: *Window, op_data: Window.ResizeData, new_width: ?i32, new_height: ?i32) void {
     const output = window.output orelse return;
     const width_delta = if (new_width) |w| w - op_data.start_width else 0;
     const height_delta = if (new_height) |h| h - op_data.start_height else 0;
