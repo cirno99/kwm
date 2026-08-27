@@ -21,7 +21,7 @@ pub fn arrange(self: *const Self, output: *Output) !void {
     {
         var it = ctx.windows.safeIterator(.forward);
         while (it.next()) |window| {
-            if (!window.is_visible_in(output) or window.floating) continue;
+            if (!window.is_visible_in(output) or window.floating or window.sticky) continue;
             if (window != focus_top) window.hide();
             window.unbound_move(self.gap, self.gap);
             window.unbound_resize(available_width, available_height);

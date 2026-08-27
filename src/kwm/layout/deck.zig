@@ -36,7 +36,7 @@ pub fn arrange(self: *const Self, output: *Output) !void {
                 masters_exhausted = true;
                 break;
             };
-            if (!window.is_visible_in(output) or window.floating) continue;
+            if (!window.is_visible_in(output) or window.floating or window.sticky) continue;
             try windows.append(ctx.gpa, window);
         }
     }
@@ -48,7 +48,7 @@ pub fn arrange(self: *const Self, output: *Output) !void {
             // master windows (e.g. fewer visible windows than nmaster)
             const masters = windows.items[0..@min(@as(usize, @intCast(self.nmaster)), windows.items.len)];
             if (mem.containsAtLeastScalar(*Window, masters, 1, window)) continue;
-            if (!window.is_visible_in(output) or window.floating) continue;
+            if (!window.is_visible_in(output) or window.floating or window.sticky) continue;
             try windows.append(ctx.gpa, window);
         }
     }

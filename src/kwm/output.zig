@@ -188,7 +188,7 @@ pub fn master_window(self: *Self) ?*Window {
     {
         var it = ctx.windows.safeIterator(.forward);
         while (it.next()) |window| {
-            if (window.is_visible_in(self) and !window.floating) {
+            if (window.is_visible_in(self) and !window.floating and !window.sticky) {
                 return window;
             }
         }

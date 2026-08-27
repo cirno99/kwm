@@ -93,7 +93,7 @@ Mod4-f
 	Toggle floating on the window.
 
 Mod4-Ctrl-s
-	Toggle sticky on the window.
+	Toggle sticky on the window (visible and on top on all workspaces).
 
 Mod4-a
 	Toggle swallow on the window.

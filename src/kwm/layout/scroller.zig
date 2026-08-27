@@ -22,7 +22,7 @@ row_mfact: f32 = 1.0,
 mode: Mode = .horizontal,
 
 fn isTiled(window: *Window, output: *Output) bool {
-    return window.is_visible_in(output) and !window.floating;
+    return window.is_visible_in(output) and !window.floating and !window.sticky;
 }
 
 pub fn columnHead(window: *Window, output: *Output) *Window {

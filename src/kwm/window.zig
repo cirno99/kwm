@@ -569,6 +569,11 @@ pub fn toggle_sticky(self: *Self) void {
 
     self.sticky = !self.sticky;
 
+    // sticky 窗口需要在渲染时置于顶层，强制下一帧重新 place
+    if (self.output != null) {
+        self.layer_managed = false;
+    }
+
     if (comptime build_options.bar_enabled) {
         if (self.output) |output| output.bar.damage(.title);
     }

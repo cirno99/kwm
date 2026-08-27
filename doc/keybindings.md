@@ -25,7 +25,7 @@ configuration file.
 | Mod4-Shift-e | Toggle maximize on the window |
 | Mod4-space | Switch to the previous layout |
 | Mod4-f | Toggle floating on the window |
-| Mod4-Ctrl-s | Toggle sticky on the window |
+| Mod4-Ctrl-s | Toggle sticky on the window (visible and on top on all workspaces) |
 | Mod4-a | Toggle swallow on the window |
 | Mod1-Mod4-f | Switch to the floating layout |
 | Mod4-t | Switch to the tile layout |

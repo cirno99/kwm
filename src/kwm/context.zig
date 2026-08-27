@@ -898,7 +898,7 @@ pub fn swap(self: *Self, direction: types.Direction) void {
             } orelse break;
             defer win = new_window;
             if (new_window == window) break;
-            if (new_window.is_visible_in(window.output.?) and !new_window.floating) {
+            if (new_window.is_visible_in(window.output.?) and !new_window.floating and !new_window.sticky) {
                 if (window.output.?.current_layout() == .scroller) {
                     layout.Scroller.swap(window, new_window);
                 } else window.link.swapWith(&new_window.link);
@@ -945,7 +945,7 @@ pub fn attach_window(self: *Self, window: *Window, mode: types.WindowAttachMode)
                 var i: i32 = 0;
                 var it = self.windows.safeIterator(.forward);
                 while (it.next()) |w| {
-                    if (!w.is_visible_in(output) or w.floating) continue;
+                    if (!w.is_visible_in(output) or w.floating or w.sticky) continue;
                     link = &w.link;
                     i += 1;
                     if (i == nmaster) break;
@@ -1281,7 +1281,7 @@ pub fn collect_layout_windows(self: *Self, output: *Output) !void {
     self.layout_windows.clearRetainingCapacity();
     var it = self.windows.safeIterator(.forward);
     while (it.next()) |window| {
-        if (!window.is_visible_in(output) or window.floating) continue;
+        if (!window.is_visible_in(output) or window.floating or window.sticky) continue;
         try self.layout_windows.append(self.gpa, window);
     }
 }
@@ -1359,7 +1359,10 @@ fn render_windows(self: *Self) void {
 
             if (!window.layer_managed) {
                 window.layer_managed = true;
-                if (window.floating) {
+                if (window.sticky) {
+                    // sticky 窗口在所有工作区最上层
+                    window.place(.top);
+                } else if (window.floating) {
                     window.place(.top);
                 } else {
                     window.place(.{
@@ -1378,6 +1381,16 @@ fn render_windows(self: *Self) void {
             window.place(.{
                 .below = self.layer_marker.rwm_shell_surface_node,
             });
+        }
+    }
+
+    // sticky 窗口始终保持顶层，防止新窗口或焦点提升盖住它们
+    {
+        var it = self.windows.safeIterator(.forward);
+        while (it.next()) |window| {
+            if (window.sticky and window.is_visible()) {
+                window.place(.top);
+            }
         }
     }
 
