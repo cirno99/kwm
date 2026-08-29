@@ -930,16 +930,19 @@ fn refetch_item(c: *goose.Connection, it: *Item) void {
     const proxy = Proxy.init(c, it.dest, it.path, "org.kde.StatusNotifierItem");
     var res = proxy.rawCall("org.freedesktop.DBus.Properties", "GetAll", .{GStr.new("org.kde.StatusNotifierItem")}) catch {
         remove_item(it);
+        publish();
         return;
     };
     defer res.deinit();
     if (res.msg.isError()) {
         remove_item(it);
+        publish();
         return;
     }
     var dec = res.reader();
     const props = dec.decodeAlloc(std.StringHashMap(GVariant)) catch {
         remove_item(it);
+        publish();
         return;
     };
     update_item(it, &props);
