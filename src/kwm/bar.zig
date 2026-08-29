@@ -339,25 +339,55 @@ fn tray_target_height(self: *const Self) u32 {
     return @intCast(target);
 }
 
-pub fn handle_axis(self: *Self, seat: *Seat, discrete: i32) void {
-    if (self.hidden) return;
+/// 处理滚动事件。x 为指针在 bar 主 surface 上的坐标（含 static 宽度），
+/// 由 seat 的 axis_discrete 根据指针实际所在 surface 换算后传入。
+pub fn handle_axis(self: *Self, seat: *Seat, discrete: i32, x: i32) bool {
+    if (self.hidden) return false;
 
-    if (!self.pointer_in_bar(seat.pointer_position.x, seat.pointer_position.y)) return;
+    // x 相对主 surface，减去 static 宽度得到相对 dynamic 组件的坐标
+    //（按钮命中表 button_xs 也是相对 dynamic 的）。
+    var hit_x = x;
+    hit_x -= self.static_component_width();
 
-    const buttons_cfg = ctx.cfg.bar.buttons orelse return;
-    var x = utils.logical2physics(i32, seat.pointer_position.x - self.output.x, self.scale);
-    x -= self.static_component_width();
-
+    const buttons_cfg = ctx.cfg.bar.buttons orelse return false;
     for (buttons_cfg.buttons, 0..) |button, i| {
         if (i >= self.button_xs.items.len) break;
         const bx = self.button_xs.items[i];
         const bw = self.button_widths.items[i];
-        if (x >= bx and x < bx + bw) {
+        if (hit_x >= bx and hit_x < bx + bw) {
             const action: ?binding.Action = if (discrete > 0) button.axis.down else button.axis.up;
-            if (action) |a| seat.append_action(a);
-            return;
+            if (action) |a| {
+                seat.append_action(a);
+                // 滚动不触发 river 的 manage_start，action 会积压在
+                // unhandled_actions 里永不执行（点击会触发 manage 所以有效）。
+                // 这里立即处理，等效于点击后的行为。
+                seat.handle_actions();
+            }
+            return true;
         }
     }
+    return false;
+}
+
+/// 判断传入的 wl_surface 是否属于本 bar。
+/// bar 由主 surface + static/dynamic 两个 subsurface 组成，river 的
+/// wl_pointer.enter 可能落在任意一个上，必须全部匹配。
+pub fn contains_surface(self: *Self, surface: *wl.Surface) bool {
+    if (self.hidden) return false;
+    if (self.wl_surface == surface) return true;
+    if (self.static_component.wl_surface == surface) return true;
+    if (self.dynamic_component.wl_surface == surface) return true;
+    return false;
+}
+
+/// 返回指针所在 surface 相对坐标转成"主 surface 坐标（含 static）"后的 x。
+/// dynamic subsurface 的 sx 不含 static（按钮命中表也是相对 dynamic 的），
+/// 需加回 static 宽；主 surface / static subsurface 的 sx 已含 static。
+pub fn surface_to_bar_x(self: *Self, surface: *wl.Surface, sx: i32) i32 {
+    if (surface == self.dynamic_component.wl_surface) {
+        return sx + self.static_component_width();
+    }
+    return sx;
 }
 
 pub fn toggle(self: *Self) void {

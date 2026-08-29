@@ -62,6 +62,9 @@ pointer_position: struct {
     y: i32 = 0,
     new: bool = false,
 } = .{},
+pointer_surface: ?*wl.Surface = null,
+pointer_sx: i32 = 0,
+pointer_sy: i32 = 0,
 window_below_pointer: struct {
     window: ?*Window = null,
     new: bool = false,
@@ -1242,8 +1245,21 @@ fn wl_pointer_listener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *
         .enter => |data| {
             log.debug("<{*}> enter: (surface: {*}, x: {}, y: {})", .{ seat, data.surface, data.surface_x.toInt(), data.surface_y.toInt() });
 
+            seat.pointer_surface = data.surface;
+            seat.pointer_sx = data.surface_x.toInt();
+            seat.pointer_sy = data.surface_y.toInt();
+
             if (seat.cursor_shape_device) |cursor_shape_device| {
                 cursor_shape_device.setShape(0, .default);
+            }
+        },
+        .motion => |data| {
+            // 滚动事件不携带坐标，但滚动前指针已在 bar 上移动过（enter/motion
+            // 已记录 surface 相对坐标）。motion 无 surface 字段，只更新坐标，
+            // 保留 enter 记录的 surface。
+            if (seat.pointer_surface != null) {
+                seat.pointer_sx = data.surface_x.toInt();
+                seat.pointer_sy = data.surface_y.toInt();
             }
         },
         .axis_discrete => |data| {
@@ -1252,9 +1268,25 @@ fn wl_pointer_listener(wl_pointer: *wl.Pointer, event: wl.Pointer.Event, seat: *
             if (data.axis != .vertical_scroll) return;
 
             if (comptime build_options.bar_enabled) {
-                // only the bar containing the pointer can receive the scroll
+                // 指针所在 surface 能直接匹配到 bar：用该 bar 的坐标换算命中。
+                // bar 由主 surface + static/dynamic 两个 subsurface 组成，
+                // river 的 wl_pointer.enter 可能落在任意一个上，
+                // 所以用 contains_surface 匹配全部三个。
+                if (seat.pointer_surface) |surface| {
+                    var it = ctx.outputs.safeIterator(.forward);
+                    while (it.next()) |output| {
+                        if (output.bar.contains_surface(surface)) {
+                            const bar_x = output.bar.surface_to_bar_x(surface, seat.pointer_sx);
+                            _ = output.bar.handle_axis(seat, data.discrete, bar_x);
+                            return;
+                        }
+                    }
+                }
+
+                // 未匹配到 bar surface（指针不在任何 bar 上）才回退到
+                // pointer_position 命中 output。
                 if (ctx.output_at_position(seat.pointer_position.x, seat.pointer_position.y)) |output| {
-                    output.bar.handle_axis(seat, data.discrete);
+                    _ = output.bar.handle_axis(seat, data.discrete, output.bar.surface_to_bar_x(seat.pointer_surface orelse output.bar.wl_surface, seat.pointer_sx));
                 }
             }
         },
