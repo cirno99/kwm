@@ -576,6 +576,19 @@ pub fn focus_direction(self: *Self, direction: types.WindowDirection) void {
                 }
                 return;
             }
+            if (!window.floating and output.current_layout() == .canvas) {
+                const canvas = switch (output.current_layout()) {
+                    .canvas => |c| c,
+                    else => unreachable,
+                };
+                if (canvas.navigate(window, output, direction)) |target| {
+                    canvas.centerOn(target, output);
+                    self.restore_before_focus(window, target);
+                    self.focus(target, true);
+                    output.manage();
+                }
+                return;
+            }
         }
         if (self.directional_target(window, direction)) |w| {
             self.restore_before_focus(window, w);
@@ -641,6 +654,13 @@ fn directional_target(self: *Self, window: *Window, direction: types.WindowDirec
                 .up => layout.Scroller.columnWindow(window, output, .reverse),
                 .down => layout.Scroller.columnWindow(window, output, .forward),
             };
+        }
+        if (output.current_layout() == .canvas) {
+            const canvas = switch (output.current_layout()) {
+                .canvas => |c| c,
+                else => unreachable,
+            };
+            return canvas.navigate(window, output, direction);
         }
         // In monocle every tiled window occupies the same geometry, so the
         // geometric search below can never find a target. Cycle through the

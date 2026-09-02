@@ -39,6 +39,7 @@ pub const deinit = Context.deinit;
 test {
     _ = @import("kwm/utils.zig");
     _ = @import("kwm/render/utils.zig");
+    _ = @import("kwm/layout/canvas.zig");
     if (build_options.bar_enabled) {
         _ = @import("kwm/systray.zig");
     }

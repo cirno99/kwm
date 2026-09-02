@@ -7,6 +7,7 @@ pub const Type = enum {
     deck,
     scroller,
     centered_master,
+    canvas,
     float,
 };
 
@@ -16,11 +17,13 @@ pub const Monocle = @import("layout/monocle.zig");
 pub const Deck = @import("layout/deck.zig");
 pub const Scroller = @import("layout/scroller.zig");
 pub const CenteredMaster = @import("layout/centered_master.zig");
+pub const Canvas = @import("layout/canvas.zig");
 
 
 tile: Tile,
 grid: Grid,
 monocle: Monocle,
 deck: Deck,
-scroller: Scroller,
-centered_master: CenteredMaster,
+    scroller: Scroller,
+    centered_master: CenteredMaster,
+    canvas: Canvas,

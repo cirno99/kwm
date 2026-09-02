@@ -34,6 +34,7 @@ configuration file.
 | Mod4-m | Switch to the monocle layout |
 | Mod4-s | Switch to the scroller layout |
 | Mod4-u | Switch to the centered master layout |
+| Mod4-c | Switch to the canvas layout (pseudo-infinite canvas) |
 | Mod4-Tab | Switch to the previous tag |
 | Mod4-\[';\] | Shift output's each tag to the next/previous occupied output tag |
 | Mod4-Shift-\[';\] | Shift window's each tag to the next/previous unoccupied output tag |

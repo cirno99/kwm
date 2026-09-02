@@ -504,6 +504,17 @@ pub fn handle_actions(self: *Self) void {
             },
             .move => |data| {
                 if (ctx.focused_window()) |window| {
+                    if (window.output) |output| {
+                        if (output.current_layout() == .canvas) {
+                            // canvas 布局：移动画布坐标，不转为浮动窗口
+                            switch (data.step) {
+                                .horizontal => |offset| window.canvas_x.? += offset,
+                                .vertical => |offset| window.canvas_y.? += offset,
+                            }
+                            output.manage();
+                            continue;
+                        }
+                    }
                     window.ensure_floating();
                     switch (data.step) {
                         .horizontal => |offset| window.move(window.x + offset, null),
@@ -513,6 +524,16 @@ pub fn handle_actions(self: *Self) void {
             },
             .resize => |data| {
                 if (ctx.focused_window()) |window| {
+                    if (window.output) |output| {
+                        if (output.current_layout() == .canvas) {
+                            // canvas 布局：直接调整尺寸，不转为浮动窗口
+                            switch (data.step) {
+                                .horizontal => |offset| window.resize(window.width + offset, null),
+                                .vertical => |offset| window.resize(null, window.height + offset),
+                            }
+                            continue;
+                        }
+                    }
                     window.ensure_floating();
                     switch (data.step) {
                         .horizontal => |offset| {
@@ -529,7 +550,10 @@ pub fn handle_actions(self: *Self) void {
             .pointer_move => {
                 if (self.window_below_pointer.window) |window| {
                     self.window_interaction(window);
-                    window.ensure_floating();
+                    // canvas 布局：拖动窗口保持平铺（同步画布坐标），不转为浮动
+                    if (window.output == null or window.output.?.current_layout() != .canvas) {
+                        window.ensure_floating();
+                    }
                     window.prepare_move(.{ .start = .{ .seat = self } });
                 }
             },
@@ -541,6 +565,10 @@ pub fn handle_actions(self: *Self) void {
             },
             .snap => |data| {
                 if (ctx.focused_window()) |window| {
+                    // canvas 布局无边缘吸附概念，忽略
+                    if (window.output) |output| {
+                        if (output.current_layout() == .canvas) continue;
+                    }
                     window.ensure_floating();
                     window.snap_to(data.edge);
                 }
@@ -811,6 +839,7 @@ pub fn handle_actions(self: *Self) void {
                         .deck => |deck| deck.inner_gap = @max(ctx.cfg.border.width * 2, deck.inner_gap + data.step),
                         .scroller => |scroller| scroller.inner_gap = @max(ctx.cfg.border.width * 2, scroller.inner_gap + data.step),
                         .centered_master => |centered_master| centered_master.inner_gap = @max(ctx.cfg.border.width * 2, centered_master.inner_gap + data.step),
+                        .canvas => |canvas| canvas.inner_gap = @max(ctx.cfg.border.width * 2, canvas.inner_gap + data.step),
                         .float => {},
                     }
                 }
@@ -835,6 +864,44 @@ pub fn handle_actions(self: *Self) void {
                 if (ctx.current_output) |output| {
                     switch (output.current_layout()) {
                         .scroller => |scroller| scroller.mode = data.mode,
+                        else => {},
+                    }
+                }
+            },
+            .canvas_pan => |data| {
+                if (ctx.current_output) |output| {
+                    switch (output.current_layout()) {
+                        .canvas => |canvas| {
+                            canvas.pan(data.dx, data.dy);
+                            output.manage();
+                        },
+                        else => {},
+                    }
+                }
+            },
+            .canvas_focus_direction => |data| {
+                ctx.focus_direction(data.direction);
+            },
+            .canvas_center_focus => {
+                if (ctx.focused_window()) |window| {
+                    if (window.output) |output| {
+                        switch (output.current_layout()) {
+                            .canvas => |canvas| {
+                                canvas.centerOn(window, output);
+                                output.manage();
+                            },
+                            else => {},
+                        }
+                    }
+                }
+            },
+            .canvas_flex_layout => {
+                if (ctx.current_output) |output| {
+                    switch (output.current_layout()) {
+                        .canvas => |canvas| {
+                            canvas.toggleFlex(output);
+                            output.manage();
+                        },
                         else => {},
                     }
                 }
@@ -943,6 +1010,11 @@ fn resize_tiled(window: *Window, op_data: Window.ResizeData, new_width: ?i32, ne
                 window.scroller_row_mfact = @min(1, @max(0, @as(f32, @floatFromInt(op_data.start_height + height_delta)) / @as(f32, @floatFromInt(usable))));
             }
         },
+        .canvas => {
+            // canvas 布局：直接调整窗口尺寸
+            if (new_width) |w| window.resize(w, null);
+            if (new_height) |h| window.resize(null, h);
+        },
         else => return,
     }
     output.manage();
@@ -1020,6 +1092,15 @@ fn rwm_seat_listener(rwm_seat: *river.SeatV1, event: river.SeatV1.Event, seat: *
                             window.set_output(new_output, true);
                             window.set_tag(new_output.tag);
                             ctx.set_current_output(new_output);
+                        }
+                        // canvas 布局：拖动同步画布坐标（屏幕位置 = 画布坐标 - 相机偏移）
+                        if (new_output.current_layout() == .canvas) {
+                            const canvas = switch (new_output.current_layout()) {
+                                .canvas => |c| c,
+                                else => unreachable,
+                            };
+                            window.canvas_x = abs_x - new_output.x + canvas.cam_x;
+                            window.canvas_y = abs_y - new_output.y + canvas.cam_y;
                         }
                         window.move(abs_x - new_output.x, abs_y - new_output.y);
                     }

@@ -98,6 +98,7 @@
                     .horizontal = "=[]=",
                     .vertical = "=[V]="
                 },
+                .canvas = "[∞]",
                 .float = "><>",
             },
 
@@ -229,6 +230,7 @@
         .scroller = .below_focused,
         .centered_master = .top,
         .float = .top,
+        .canvas = .top,
     },
 
     // .csd
@@ -304,6 +306,10 @@
             // .horizontal
             // .vertical
             .direction = .horizontal,
+        },
+        .canvas = .{
+            .outer_gap = 9,
+            .inner_gap = 12,
         },
     },
 
@@ -856,6 +862,17 @@
                 },
             },
             .{
+                .keysym = "c",
+                .modifiers = .{ .mod4 = true },
+                .event = .{
+                    .click = .{
+                        .pressed = .{
+                            .switch_layout = .{ .layout = .canvas },
+                        },
+                    },
+                },
+            },
+            .{
                 .keysym = "Tab",
                 .modifiers = .{ .mod4 = true },
                 .event = .{
@@ -962,6 +979,18 @@
             .{ .keysym = "7", .modifiers = .{ .mod1 = true }, .event = .{ .click = .{ .pressed = .{ .focus_scroller_column = .{ .column = 7 } } } } },
             .{ .keysym = "8", .modifiers = .{ .mod1 = true }, .event = .{ .click = .{ .pressed = .{ .focus_scroller_column = .{ .column = 8 } } } } },
             .{ .keysym = "9", .modifiers = .{ .mod1 = true }, .event = .{ .click = .{ .pressed = .{ .focus_scroller_column = .{ .column = 9 } } } } },
+
+            // canvas 布局（伪无限画布）：
+            // 方向导航复用 mod4+h/j/k/l 的 focus_direction（canvas 布局已接入，自动生效）
+            // 平移画布（示例，按需取消注释；注意与现有绑定避免冲突）：
+            // .{ .keysym = "h", .modifiers = .{ .mod4 = true, .ctrl = true, .shift = true }, .event = .{ .repeat = .{ .canvas_pan = .{ .dx = -50, .dy = 0 } } } },
+            // .{ .keysym = "l", .modifiers = .{ .mod4 = true, .ctrl = true, .shift = true }, .event = .{ .repeat = .{ .canvas_pan = .{ .dx = 50, .dy = 0 } } } },
+            // .{ .keysym = "k", .modifiers = .{ .mod4 = true, .ctrl = true, .shift = true }, .event = .{ .repeat = .{ .canvas_pan = .{ .dx = 0, .dy = -50 } } } },
+            // .{ .keysym = "j", .modifiers = .{ .mod4 = true, .ctrl = true, .shift = true }, .event = .{ .repeat = .{ .canvas_pan = .{ .dx = 0, .dy = 50 } } } },
+            // 将相机居中到焦点窗口：
+            // .{ .keysym = "space", .modifiers = .{ .mod4 = true, .ctrl = true }, .event = .{ .click = .{ .pressed = .canvas_center_focus } } },
+            // 排列/还原 canvas 窗口（photo-flex-layout 风格，按创建顺序；再次触发还原）：
+            // .{ .keysym = "f", .modifiers = .{ .mod4 = true, .ctrl = true }, .event = .{ .click = .{ .pressed = .canvas_flex_layout } } },
 
             .{
                 .keysym = "l",

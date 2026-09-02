@@ -148,6 +148,18 @@ scroller_column_start: bool = false,
 // The window focused in this column when focus last left it (stored on the
 // column head), restored when focus moves back to the column from the side.
 scroller_column_focus: ?*Self = null,
+// 画布坐标（canvas 布局使用）：窗口在无限画布上的绝对位置，渲染位置 = 画布坐标 - 相机偏移。
+// null 表示尚未放置（首次 arrange 时落在相机中心附近）。
+canvas_x: ?i32 = null,
+canvas_y: ?i32 = null,
+// canvas flex 排列快照：排列前窗口在画布上的原始位置与尺寸，用于 toggle 还原。
+// null 表示未参与 flex 排列（或已还原）。
+flex_saved: ?struct {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+} = null,
 floating_geometry: ?struct {
     x: i32,
     y: i32,
