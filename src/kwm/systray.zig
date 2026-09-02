@@ -114,6 +114,22 @@ var target_height: u32 = 0;
 var is_watcher: bool = false;
 var registered_hosts: std.ArrayList([:0]u8) = .empty;
 
+/// Items whose initial property fetch failed (e.g. the app was busy and the
+/// GetAll timed out). Registration signals are consumed once, so without a
+/// retry queue the icon would never appear. Only accessed from the dbus thread.
+const PendingItem = struct {
+    dest: [:0]u8,
+    /// Explicit object path from the registration signal, if any; retried
+    /// before the default paths.
+    path: ?[:0]u8,
+    attempts: u8,
+};
+
+var pending_items: std.ArrayList(PendingItem) = .empty;
+const pending_max_attempts: u8 = 5;
+/// serve_bus poll timeout driving periodic retries (and prompter shutdown).
+const pending_poll_ms: i32 = 2000;
+
 const SignalCtx = struct { conn: *goose.Connection };
 var sig_ctx: SignalCtx = undefined;
 
@@ -277,11 +293,14 @@ fn serve_bus(conn: *goose.Connection) bool {
     };
 
     while (running.load(.acquire)) {
-        const n = posix.poll(&poll_fds, -1) catch |err| {
+        const n = posix.poll(&poll_fds, pending_poll_ms) catch |err| {
             log.warn("systray poll failed: {}", .{err});
             continue;
         };
-        if (n == 0) continue;
+        if (n == 0) {
+            retry_pending(conn);
+            continue;
+        }
 
         if (poll_fds[1].revents & (posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR) != 0) {
             drain_requests();
@@ -289,9 +308,11 @@ fn serve_bus(conn: *goose.Connection) bool {
 
         if (poll_fds[0].revents & (posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR) != 0) {
             const msg = conn.waitMessage() catch |err| {
-                log.warn("systray waitMessage failed: {}", .{err});
-                if (err == error.EndOfStream or err == error.ConnectionResetByPeer) return true;
-                continue;
+                // D-Bus 是有序字节流：解码/协议错误发生后无法重新对齐，
+                // 任何错误都必须断开重连，否则线程会带着错位的流无限忙转，
+                // 表现为托盘图标永远不再更新。
+                log.warn("systray waitMessage failed: {}, reconnecting", .{err});
+                return true;
             };
             if (msg.header.message_type == .Signal) {
                 dispatch_signal(msg);
@@ -318,6 +339,13 @@ fn reset_state() void {
 
     for (registered_hosts.items) |h| ctx.gpa.free(h);
     registered_hosts.clearRetainingCapacity();
+
+    for (pending_items.items) |p| {
+        if (p.path) |path| ctx.gpa.free(path);
+        ctx.gpa.free(p.dest);
+    }
+    pending_items.clearRetainingCapacity();
+
     is_watcher = false;
 
     snapshot_mutex.lockUncancelable(ctx.io);
@@ -430,11 +458,19 @@ fn on_name_owner_changed(sctx: *SignalCtx, args: @Tuple(&[_]type{ GStr, GStr, GS
         return;
     }
 
-    if (mem.eql(u8, name.s, "org.kde.StatusNotifierWatcher") and new.s.len > 0) {
-        log.debug("StatusNotifierWatcher appeared, re-registering", .{});
-        register_host(sctx.conn);
-        enumerate(sctx.conn);
-        publish();
+    if (mem.eql(u8, name.s, "org.kde.StatusNotifierWatcher")) {
+        if (new.s.len > 0) {
+            log.debug("StatusNotifierWatcher appeared, re-registering", .{});
+            register_host(sctx.conn);
+            enumerate(sctx.conn);
+            publish();
+        } else if (claim_watcher_name(sctx.conn)) {
+            // 外部 watcher 退出且名字无人认领：接管 watcher 角色，
+            // 否则永远收不到注册/注销广播，托盘会冻结在旧状态。
+            is_watcher = true;
+            register_self_as_host(sctx.conn);
+            publish();
+        }
     }
 }
 
@@ -872,6 +908,11 @@ fn add_item(c: *goose.Connection, service: []const u8) void {
     for (paths) |path| {
         if (try_fetch_item(c, service_z, path)) return;
     }
+
+    // Every fetch path failed (e.g. the app was too busy to answer GetAll
+    // before the timeout). Queue a periodic retry instead of dropping the
+    // registration forever.
+    queue_pending(service_z, explicit_path);
 }
 
 fn try_fetch_item(c: *goose.Connection, service_z: [:0]const u8, path: [:0]const u8) bool {
@@ -913,6 +954,110 @@ fn try_fetch_item(c: *goose.Connection, service_z: [:0]const u8, path: [:0]const
     return true;
 }
 
+/// Queues a registration for periodic retry after the initial fetch failed.
+/// Duplicate destinations keep their existing retry budget so a burst of
+/// registration signals cannot reset the give-up counter.
+fn queue_pending(service_z: [:0]const u8, explicit_path: ?[]const u8) void {
+    for (pending_items.items) |*p| {
+        if (mem.eql(u8, p.dest, service_z)) return;
+    }
+
+    const dest = ctx.gpa.dupeZ(u8, service_z) catch return;
+    const path: ?[:0]u8 = if (explicit_path) |ep|
+        ctx.gpa.dupeZ(u8, ep) catch null
+    else
+        null;
+    pending_items.append(ctx.gpa, .{ .dest = dest, .path = path, .attempts = 0 }) catch {
+        if (path) |p| ctx.gpa.free(p);
+        ctx.gpa.free(dest);
+        return;
+    };
+    log.debug("systray: queued retry for {s}", .{dest});
+}
+
+/// Returns true when `name` still has an owner on the bus. Unlike `get_owner`,
+/// this never shortcuts unique names: the whole point is to ask the bus
+/// whether the peer is still connected.
+fn bus_owner_alive(c: *goose.Connection, name: [:0]const u8) bool {
+    const bus = Proxy.init(c, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus");
+    var res = bus.call("GetNameOwner", .{GStr.new(name)}) catch return false;
+    defer res.deinit();
+    if (res.msg.isError()) return false;
+    return true;
+}
+
+/// Retries pending registrations. Runs on the dbus thread every
+/// `pending_poll_ms` while the poll loop is otherwise idle.
+fn retry_pending(c: *goose.Connection) void {
+    var i: usize = 0;
+    while (i < pending_items.items.len) {
+        const p = &pending_items.items[i];
+
+        // Another registration for the same dest already succeeded in the
+        // meantime; drop the stale retry to avoid a duplicate item.
+        var already_present = false;
+        for (items.items) |it| {
+            if (mem.eql(u8, it.dest, p.dest)) {
+                already_present = true;
+                break;
+            }
+        }
+        if (already_present) {
+            log.debug("systray: retry for {s} no longer needed (already registered)", .{p.dest});
+            drop_pending(i);
+            continue;
+        }
+
+        // The application left the bus while we were retrying; give up.
+        if (!bus_owner_alive(c, p.dest)) {
+            log.debug("systray: retry for {s} abandoned (owner left the bus)", .{p.dest});
+            drop_pending(i);
+            continue;
+        }
+
+        if (p.attempts >= pending_max_attempts) {
+            log.warn("systray: giving up on {s} after {} attempts", .{ p.dest, p.attempts });
+            drop_pending(i);
+            continue;
+        }
+
+        p.attempts += 1;
+        var fetched = false;
+        if (p.path) |path| {
+            fetched = try_fetch_item(c, p.dest, path);
+        }
+        if (!fetched) {
+            const paths = [_][:0]const u8{
+                "/StatusNotifierItem",
+                "/org/kde/StatusNotifierItem",
+                "/org/freedesktop/StatusNotifierItem",
+            };
+            for (paths) |path| {
+                if (try_fetch_item(c, p.dest, path)) {
+                    fetched = true;
+                    break;
+                }
+            }
+        }
+        if (fetched) {
+            // Re-read instead of dereferencing `p`: the synchronous calls above
+            // may run nested signal handling, and pending_items may have moved.
+            log.debug("systray: retry for {s} succeeded", .{pending_items.items[i].dest});
+            drop_pending(i);
+            continue;
+        }
+        i += 1;
+    }
+}
+
+/// Frees and removes the pending entry at `index`.
+fn drop_pending(index: usize) void {
+    const p = pending_items.items[index];
+    if (p.path) |path| ctx.gpa.free(path);
+    ctx.gpa.free(p.dest);
+    _ = pending_items.orderedRemove(index);
+}
+
 fn refetch_item(c: *goose.Connection, it: *Item) void {
     // Skip reentrant refetches: the GetAll call below synchronously dispatches
     // incoming signals, and a nested refetch of this same item would start a
@@ -929,24 +1074,34 @@ fn refetch_item(c: *goose.Connection, it: *Item) void {
 
     const proxy = Proxy.init(c, it.dest, it.path, "org.kde.StatusNotifierItem");
     var res = proxy.rawCall("org.freedesktop.DBus.Properties", "GetAll", .{GStr.new("org.kde.StatusNotifierItem")}) catch {
-        remove_item(it);
+        maybe_drop_item(c, it);
         publish();
         return;
     };
     defer res.deinit();
     if (res.msg.isError()) {
-        remove_item(it);
+        maybe_drop_item(c, it);
         publish();
         return;
     }
     var dec = res.reader();
     const props = dec.decodeAlloc(std.StringHashMap(GVariant)) catch {
-        remove_item(it);
+        maybe_drop_item(c, it);
         publish();
         return;
     };
     update_item(it, &props);
     publish();
+}
+
+/// refetch 失败后决定是否移除条目：仅当 dest 已无 owner（应用退出）时才删除；
+/// 应用只是暂时无响应（如 GetAll 超时）时保留条目，等待下一个 NewIcon 信号重试。
+fn maybe_drop_item(c: *goose.Connection, it: *Item) void {
+    const owner = get_owner(c, it.dest) orelse {
+        remove_item(it);
+        return;
+    };
+    ctx.gpa.free(owner);
 }
 
 fn update_item(it: *Item, props: *const std.StringHashMap(GVariant)) void {

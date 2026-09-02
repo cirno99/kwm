@@ -149,6 +149,70 @@ pub fn centerOn(self: *Self, window: *Window, output: *Output) void {
     self.cam_y = window.canvas_y.? + @divFloor(window.height, 2) - @divFloor(output.height, 2);
 }
 
+// 拖拽钳制结果：钳制后的期望渲染坐标，以及为跟随指针而移动相机的偏移量。
+const DragClamp = struct {
+    rx: i32,
+    ry: i32, 
+    cam_dx: i32,
+    cam_dy: i32,
+};
+
+// 拖拽钳制（纯函数，便于测试）：仅允许窗口在当前 output 可视范围内移动（无限画布概念，
+// 拖到屏幕边缘不跨屏），超出屏幕边缘的部分转为相机平移，实现"拖边即滚动画布"。
+//
+// rx/ry 为指针移动后期望的窗口渲染坐标（窗口画布坐标 - 相机偏移）；
+// 钳制范围：[outer_gap, output.width - window.width - outer_gap]（y 同理）；
+// cam_dx/cam_dy 为相机需追加的平移量：钳制发生时，超出量即相机应跟随移动的距离，
+// 使窗口画布坐标保持与指针 1:1（被拖窗口贴边，其余窗口随相机滑过视野）。
+// 窗口宽/高不小于输出（或输出过小）时钳制区间为空，返回钳制到左上边缘的结果。
+pub fn dragClamp(rx: i32, ry: i32, window_width: i32, window_height: i32, output_width: i32, output_height: i32, outer_gap: i32) DragClamp {
+    // x 轴：钳制到 [outer_gap, output.width - window.width - outer_gap]
+    const min_x = outer_gap;
+    const max_x = output_width - window_width - outer_gap;
+    const clamped_rx = @min(@max(rx, min_x), @max(max_x, min_x));
+    const cam_dx = rx - clamped_rx;
+    // y 轴：钳制到 [outer_gap, output.height - window.height - outer_gap]
+    const min_y = outer_gap;
+    const max_y = output_height - window_height - outer_gap;
+    const clamped_ry = @min(@max(ry, min_y), @max(max_y, min_y));
+    const cam_dy = ry - clamped_ry;
+    return .{ .rx = clamped_rx, .ry = clamped_ry, .cam_dx = cam_dx, .cam_dy = cam_dy };
+}
+
+test "dragClamp 屏幕内正常拖动不移动相机" {
+    // 1000×800 输出，400×300 窗口，outer_gap=10：x∈[10,590]，y∈[10,490]
+    const result = dragClamp(100, 200, 400, 300, 1000, 800, 10);
+    try std.testing.expectEqual(@as(i32, 100), result.rx);
+    try std.testing.expectEqual(@as(i32, 200), result.ry);
+    try std.testing.expectEqual(@as(i32, 0), result.cam_dx);
+    try std.testing.expectEqual(@as(i32, 0), result.cam_dy);
+}
+
+test "dragClamp 拖出右/下边缘钳制并右/下移相机" {
+    const result = dragClamp(700, 600, 400, 300, 1000, 800, 10);
+    try std.testing.expectEqual(@as(i32, 590), result.rx);
+    try std.testing.expectEqual(@as(i32, 490), result.ry);
+    try std.testing.expectEqual(@as(i32, 110), result.cam_dx);
+    try std.testing.expectEqual(@as(i32, 110), result.cam_dy);
+}
+
+test "dragClamp 拖出左/上边缘钳制并左/上移相机" {
+    const result = dragClamp(-50, -30, 400, 300, 1000, 800, 10);
+    try std.testing.expectEqual(@as(i32, 10), result.rx);
+    try std.testing.expectEqual(@as(i32, 10), result.ry);
+    try std.testing.expectEqual(@as(i32, -60), result.cam_dx);
+    try std.testing.expectEqual(@as(i32, -40), result.cam_dy);
+}
+
+test "dragClamp 窗口不小于输出时钳到左上边缘" {
+    // 窗口 1200×900 大于输出 1000×800：max < min，取 min
+    const result = dragClamp(500, 500, 1200, 900, 1000, 800, 10);
+    try std.testing.expectEqual(@as(i32, 10), result.rx);
+    try std.testing.expectEqual(@as(i32, 10), result.ry);
+    try std.testing.expectEqual(@as(i32, 490), result.cam_dx);
+    try std.testing.expectEqual(@as(i32, 490), result.cam_dy);
+}
+
 // ---- flex 排列（参考 photo-flex-layout，按窗口创建顺序组织） ----
 
 // flex 排列结果：相对排列原点的画布坐标与尺寸。

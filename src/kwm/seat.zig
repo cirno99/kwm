@@ -1079,30 +1079,60 @@ fn rwm_seat_listener(rwm_seat: *river.SeatV1, event: river.SeatV1.Event, seat: *
                 .none => log.warn("<{*}> op delta while no window has an active operator, ignoring", .{seat}),
                 .move => |op_data| {
                     if (op_data.seat == seat) {
-                        const abs_x = op_data.origin_output.x + op_data.start_x + data.dx;
-                        const abs_y = op_data.origin_output.y + op_data.start_y + data.dy;
-
                         const current_output = window.output orelse unreachable;
-                        const new_output = ctx.output_at_position(
-                            abs_x + @divTrunc(window.width, 2),
-                            abs_y + @divTrunc(window.height, 2),
-                        ) orelse current_output;
 
-                        if (new_output != current_output) {
-                            window.set_output(new_output, true);
-                            window.set_tag(new_output.tag);
-                            ctx.set_current_output(new_output);
-                        }
-                        // canvas 布局：拖动同步画布坐标（屏幕位置 = 画布坐标 - 相机偏移）
-                        if (new_output.current_layout() == .canvas) {
-                            const canvas = switch (new_output.current_layout()) {
+                        // canvas 布局：无限画布——拖动不跨 output；窗口拖到屏幕边缘时
+                        // 相机随之平移（被拖窗口贴边，其余窗口随相机滑过视野）。
+                        if (current_output.current_layout() == .canvas) {
+                            const canvas = switch (current_output.current_layout()) {
                                 .canvas => |c| c,
                                 else => unreachable,
                             };
-                            window.canvas_x = abs_x - new_output.x + canvas.cam_x;
-                            window.canvas_y = abs_y - new_output.y + canvas.cam_y;
+                            const abs_x = op_data.origin_output.x + op_data.start_x + data.dx;
+                            const abs_y = op_data.origin_output.y + op_data.start_y + data.dy;
+                            const clamped = layout.Canvas.dragClamp(
+                                abs_x - current_output.x,
+                                abs_y - current_output.y,
+                                window.width,
+                                window.height,
+                                current_output.width,
+                                current_output.height,
+                                canvas.outer_gap,
+                            );
+                            // 超出屏幕边缘的部分转为相机平移，画布坐标保持随指针 1:1
+                            canvas.cam_x += clamped.cam_dx;
+                            canvas.cam_y += clamped.cam_dy;
+                            window.canvas_x = clamped.rx + canvas.cam_x;
+                            window.canvas_y = clamped.ry + canvas.cam_y;
+                            window.move(clamped.rx, clamped.ry);
+                            // 相机平移后其余窗口的渲染位置随之变化，需要重新排列
+                            if (clamped.cam_dx != 0 or clamped.cam_dy != 0) current_output.manage();
+                        } else {
+                            const abs_x = op_data.origin_output.x + op_data.start_x + data.dx;
+                            const abs_y = op_data.origin_output.y + op_data.start_y + data.dy;
+
+                            const new_output = ctx.output_at_position(
+                                abs_x + @divTrunc(window.width, 2),
+                                abs_y + @divTrunc(window.height, 2),
+                            ) orelse current_output;
+
+                            if (new_output != current_output) {
+                                window.set_output(new_output, true);
+                                window.set_tag(new_output.tag);
+                                ctx.set_current_output(new_output);
+                            }
+                            // canvas 布局：从其他布局拖入 canvas 输出时同步画布坐标
+                            // （屏幕位置 = 画布坐标 - 相机偏移）
+                            if (new_output.current_layout() == .canvas) {
+                                const canvas = switch (new_output.current_layout()) {
+                                    .canvas => |c| c,
+                                    else => unreachable,
+                                };
+                                window.canvas_x = abs_x - new_output.x + canvas.cam_x;
+                                window.canvas_y = abs_y - new_output.y + canvas.cam_y;
+                            }
+                            window.move(abs_x - new_output.x, abs_y - new_output.y);
                         }
-                        window.move(abs_x - new_output.x, abs_y - new_output.y);
                     }
                 },
                 .resize => |op_data| {
