@@ -34,34 +34,59 @@ pub var status_buffer = [1]u8{0} ** 4097;
 // re-rendered (but seldom changing) bar texts don't get re-allocated and
 // re-shaped by fcft on every dynamic component render.
 const TextCache = struct {
-    bytes: [256]u8 = undefined,
-    len: usize = 0,
-    run: ?*const fcft.TextRun = null,
+    const slot_count = 4;
+
+    const Slot = struct {
+        bytes: [256]u8 = undefined,
+        len: usize = 0,
+        run: ?*const fcft.TextRun = null,
+        last_use: u32 = 0,
+    };
+
+    slots: [slot_count]Slot = @splat(.{}),
+    clock: u32 = 0,
 
     fn get(self: *TextCache, font: *render_.Font, str: []const u8) ?*const fcft.TextRun {
-        if (str.len <= self.bytes.len and self.len == str.len and mem.eql(u8, self.bytes[0..self.len], str)) {
-            return self.run;
+        self.clock += 1;
+        for (&self.slots) |*slot| {
+            if (slot.len == str.len and mem.eql(u8, slot.bytes[0..slot.len], str)) {
+                slot.last_use = self.clock;
+                return slot.run;
+            }
         }
 
-        if (self.run) |run| run.destroy();
-        self.run = null;
-        self.len = 0;
+        // victim: prefer an unused slot, otherwise evict the least recently
+        // used one
+        var victim: *Slot = &self.slots[0];
+        for (&self.slots) |*slot| {
+            if (slot.len == 0) {
+                victim = slot;
+                break;
+            }
+            if (slot.last_use < victim.last_use) victim = slot;
+        }
+        if (victim.run) |run| run.destroy();
+        victim.run = null;
+        victim.len = 0;
 
-        if (str.len > self.bytes.len) return null;
+        if (str.len > victim.bytes.len) return null;
 
         const utf8 = render_.utils.to_utf8(ctx.gpa, str) catch return null;
         defer ctx.gpa.free(utf8);
 
-        self.run = font.rasterize_text_run(utf8) orelse return null;
-        @memcpy(self.bytes[0..str.len], str);
-        self.len = str.len;
-        return self.run;
+        victim.run = font.rasterize_text_run(utf8) orelse return null;
+        @memcpy(victim.bytes[0..str.len], str);
+        victim.len = str.len;
+        victim.last_use = self.clock;
+        return victim.run;
     }
 
     fn deinit(self: *TextCache) void {
-        if (self.run) |run| run.destroy();
-        self.run = null;
-        self.len = 0;
+        for (&self.slots) |*slot| {
+            if (slot.run) |run| run.destroy();
+            slot.run = null;
+            slot.len = 0;
+        }
     }
 };
 
@@ -114,7 +139,7 @@ static_splits: std.ArrayList(i32) = .empty,
 dynamic_splits: std.ArrayList(i32) = undefined,
 button_xs: std.ArrayList(i32) = .empty,
 button_widths: std.ArrayList(i32) = .empty,
-minimized_items: [32]struct { x: i32, window: *Window } = undefined,
+minimized_items: [32]struct { x: i32, window: *Window, cache: TextCache = .{} } = undefined,
 minimized_items_len: usize = 0,
 
 tag_texts: std.ArrayList(*const fcft.TextRun) = .empty,
@@ -178,6 +203,7 @@ fn clear_text_runs(self: *Self) void {
     self.mode_cache.deinit();
     self.layout_cache.deinit();
     self.title_cache.deinit();
+    for (self.minimized_items[0..self.minimized_items_len]) |*item| item.cache.deinit();
     self.status_cache.reset();
 }
 
@@ -222,6 +248,7 @@ pub fn handle_click(self: *Self, seat: *Seat) void {
     if (ctx.cfg.bar.tags) |area| {
         if (x <= self.static_component_width()) {
             for (0.., self.static_splits.items) |i, split| {
+                if (i >= @bitSizeOf(u32)) break;
                 if (x <= split) {
                     const tag = @as(u32, @intCast(1)) << @as(u5, @intCast(i));
                     const callback_action = area.click.getter.get(seat.button) orelse return;
@@ -615,7 +642,10 @@ fn render_static_component(self: *Self) void {
         const tw = @as(i32, @intCast(render_.utils.text_width(text))) + @as(i32, pad);
         if (tw <= 0) continue;
         total_tag_width += tw;
-        self.static_splits.appendBounded(total_tag_width) catch unreachable;
+        self.static_splits.appendBounded(total_tag_width) catch {
+            log.err("<{*}> static splits overflow, tags: {}", .{ self, total_tag_width });
+            break;
+        };
     }
     if (total_tag_width <= 0) return;
     const h = self.height(false);
@@ -641,6 +671,7 @@ fn render_static_component(self: *Self) void {
     var x: i32 = 0;
     const y: i16 = 0;
     for (0.., self.tag_texts.items) |i, text| {
+        if (i >= @bitSizeOf(u32)) break;
         const tag: u32 = @as(u32, @intCast(1)) << @as(u5, @intCast(i));
 
         const is_focused = self.output.tag & tag != 0;
@@ -754,7 +785,10 @@ fn render_dynamic_component(self: *Self) void {
             y,
         ) + @as(i16, @intCast(pad));
     }
-    self.dynamic_splits.appendBounded(x) catch unreachable;
+    self.dynamic_splits.appendBounded(x) catch {
+        log.warn("<{*}> dynamic splits overflow", .{self});
+        return;
+    };
 
     bg_rect[0].x = @intCast(@min(x, @as(i32, std.math.maxInt(i16))));
     bg_rect[0].width = bw - @as(u16, @intCast(@min(x, @as(i32, bw))));
@@ -843,16 +877,20 @@ fn render_dynamic_component(self: *Self) void {
             else
                 "???";
             const min_text = fmt.bufPrint(&buf, "[{s}]", .{label}) catch continue;
-            x += self.font.render_str(
-                buffer,
+            x += self.render_cached_text(
+                &item.cache,
                 min_text,
+                buffer,
                 &fg,
                 x + @as(i16, @intCast(@divFloor(pad, 2))),
                 y,
             ) + @as(i16, @intCast(pad));
         }
     }
-    self.dynamic_splits.appendBounded(x) catch unreachable;
+    self.dynamic_splits.appendBounded(x) catch {
+        log.warn("<{*}> dynamic splits overflow", .{self});
+        return;
+    };
 
     bg_rect[0].x = @intCast(@min(x, @as(i32, std.math.maxInt(i16))));
     bg_rect[0].width = bw - @as(u16, @intCast(@min(x, @as(i32, bw))));
@@ -919,7 +957,10 @@ fn render_dynamic_component(self: *Self) void {
         _ = pixman.Image.fillRectangles(.src, buffer.image, &bg, 1, &bg_rect);
     }
     const left_content_end = x;
-    self.dynamic_splits.appendBounded(@intCast(bw)) catch unreachable;
+    self.dynamic_splits.appendBounded(@intCast(bw)) catch {
+        log.warn("<{*}> dynamic splits overflow", .{self});
+        return;
+    };
 
     self.button_xs.clearRetainingCapacity();
     self.button_widths.clearRetainingCapacity();

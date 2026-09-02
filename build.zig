@@ -20,10 +20,15 @@ pub fn build(b: *std.Build) void {
     // means any target is allowed, and the default is native. Other options
     // for restricting supported target set are available.
     const target = b.standardTargetOptions(.{});
-    // Standard optimization options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
-    // set a preferred release mode, allowing the user to decide how to optimize.
-    const optimize = b.standardOptimizeOption(.{});
+    // Standard optimization options allow the person building to select
+    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. kwm is a
+    // long-running compositor process, so ReleaseSafe is the default; it can
+    // still be overridden explicitly, e.g. `zig build -Doptimize=Debug`.
+    const optimize = b.option(
+        std.builtin.OptimizeMode,
+        "optimize",
+        "Prioritize performance, safety, or binary size (-Doptimize)",
+    ) orelse .ReleaseSafe;
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
     // target and optimize options) will be listed when running `zig build --help`

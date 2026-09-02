@@ -54,6 +54,11 @@ height: i32 = undefined,
 fullscreen_cached: ?*Window = null,
 occupied_tags_cache: ?u32 = null,
 
+// 平铺 resize 拖拽的 arrange 节流：每个 op_delta 不必都触发全量重排，
+// 超过间隔才真正 manage；op_release 时 flush pending 保证终态收敛。
+tiled_resize_last_manage_ns: i64 = 0,
+tiled_resize_manage_pending: bool = false,
+
 background: if (build_options.background_enabled) @import("background.zig") else void = undefined,
 bar: if (build_options.bar_enabled) @import("bar.zig") else void = undefined,
 

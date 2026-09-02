@@ -152,7 +152,7 @@ pub fn centerOn(self: *Self, window: *Window, output: *Output) void {
 // 拖拽钳制结果：钳制后的期望渲染坐标，以及为跟随指针而移动相机的偏移量。
 const DragClamp = struct {
     rx: i32,
-    ry: i32, 
+    ry: i32,
     cam_dx: i32,
     cam_dy: i32,
 };
@@ -162,26 +162,30 @@ const DragClamp = struct {
 //
 // rx/ry 为指针移动后期望的窗口渲染坐标（窗口画布坐标 - 相机偏移）；
 // 钳制范围：[outer_gap, output.width - window.width - outer_gap]（y 同理）；
-// cam_dx/cam_dy 为相机需追加的平移量：钳制发生时，超出量即相机应跟随移动的距离，
-// 使窗口画布坐标保持与指针 1:1（被拖窗口贴边，其余窗口随相机滑过视野）。
+// prev_overshoot_x/y 为上一事件的边缘超出量（拖拽开始时为 0）。op_delta 报告的是
+// 自拖拽开始的累计位移，因此相机平移取超出量的"增量"：cam_dx = 本次超出 - 上次超出。
+// 若每个事件都追加完整超出量，指针停在边缘外时相机会被重复累加而飞移；
+// 取增量后指针不动相机不动，指针退回屏内相机可逆回退，总平移量与超出量 1:1。
 // 窗口宽/高不小于输出（或输出过小）时钳制区间为空，返回钳制到左上边缘的结果。
-pub fn dragClamp(rx: i32, ry: i32, window_width: i32, window_height: i32, output_width: i32, output_height: i32, outer_gap: i32) DragClamp {
+pub fn dragClamp(rx: i32, ry: i32, window_width: i32, window_height: i32, output_width: i32, output_height: i32, outer_gap: i32, prev_overshoot_x: i32, prev_overshoot_y: i32) DragClamp {
     // x 轴：钳制到 [outer_gap, output.width - window.width - outer_gap]
     const min_x = outer_gap;
     const max_x = output_width - window_width - outer_gap;
     const clamped_rx = @min(@max(rx, min_x), @max(max_x, min_x));
-    const cam_dx = rx - clamped_rx;
+    const overshoot_x = rx - clamped_rx;
+    const cam_dx = overshoot_x - prev_overshoot_x;
     // y 轴：钳制到 [outer_gap, output.height - window.height - outer_gap]
     const min_y = outer_gap;
     const max_y = output_height - window_height - outer_gap;
     const clamped_ry = @min(@max(ry, min_y), @max(max_y, min_y));
-    const cam_dy = ry - clamped_ry;
+    const overshoot_y = ry - clamped_ry;
+    const cam_dy = overshoot_y - prev_overshoot_y;
     return .{ .rx = clamped_rx, .ry = clamped_ry, .cam_dx = cam_dx, .cam_dy = cam_dy };
 }
 
 test "dragClamp 屏幕内正常拖动不移动相机" {
     // 1000×800 输出，400×300 窗口，outer_gap=10：x∈[10,590]，y∈[10,490]
-    const result = dragClamp(100, 200, 400, 300, 1000, 800, 10);
+    const result = dragClamp(100, 200, 400, 300, 1000, 800, 10, 0, 0);
     try std.testing.expectEqual(@as(i32, 100), result.rx);
     try std.testing.expectEqual(@as(i32, 200), result.ry);
     try std.testing.expectEqual(@as(i32, 0), result.cam_dx);
@@ -189,7 +193,7 @@ test "dragClamp 屏幕内正常拖动不移动相机" {
 }
 
 test "dragClamp 拖出右/下边缘钳制并右/下移相机" {
-    const result = dragClamp(700, 600, 400, 300, 1000, 800, 10);
+    const result = dragClamp(700, 600, 400, 300, 1000, 800, 10, 0, 0);
     try std.testing.expectEqual(@as(i32, 590), result.rx);
     try std.testing.expectEqual(@as(i32, 490), result.ry);
     try std.testing.expectEqual(@as(i32, 110), result.cam_dx);
@@ -197,7 +201,7 @@ test "dragClamp 拖出右/下边缘钳制并右/下移相机" {
 }
 
 test "dragClamp 拖出左/上边缘钳制并左/上移相机" {
-    const result = dragClamp(-50, -30, 400, 300, 1000, 800, 10);
+    const result = dragClamp(-50, -30, 400, 300, 1000, 800, 10, 0, 0);
     try std.testing.expectEqual(@as(i32, 10), result.rx);
     try std.testing.expectEqual(@as(i32, 10), result.ry);
     try std.testing.expectEqual(@as(i32, -60), result.cam_dx);
@@ -206,11 +210,40 @@ test "dragClamp 拖出左/上边缘钳制并左/上移相机" {
 
 test "dragClamp 窗口不小于输出时钳到左上边缘" {
     // 窗口 1200×900 大于输出 1000×800：max < min，取 min
-    const result = dragClamp(500, 500, 1200, 900, 1000, 800, 10);
+    const result = dragClamp(500, 500, 1200, 900, 1000, 800, 10, 0, 0);
     try std.testing.expectEqual(@as(i32, 10), result.rx);
     try std.testing.expectEqual(@as(i32, 10), result.ry);
     try std.testing.expectEqual(@as(i32, 490), result.cam_dx);
     try std.testing.expectEqual(@as(i32, 490), result.cam_dy);
+}
+
+// 回归测试：op_delta 报告自拖拽开始的累计位移，相机平移必须取超出量的增量而非全量，
+// 否则指针停在边缘外时每个事件都重复累加超出量，相机会持续飞移。
+test "dragClamp 连续事件相机增量不重复累加" {
+    // 模拟 seat.zig 的调用方式：prev_overshoot 为自拖拽开始的累计超出量
+    var overshoot_x: i32 = 0;
+    const overshoot_y: i32 = 0;
+    // 事件 1：指针首次拖出右边缘 110px，相机跟随 110
+    var clamped = dragClamp(700, 300, 400, 300, 1000, 800, 10, overshoot_x, overshoot_y);
+    try std.testing.expectEqual(@as(i32, 590), clamped.rx);
+    try std.testing.expectEqual(@as(i32, 110), clamped.cam_dx);
+    try std.testing.expectEqual(@as(i32, 0), clamped.cam_dy);
+    overshoot_x += clamped.cam_dx;
+    // 事件 2：指针停在边缘外不动，累计超出不变，相机必须不再移动
+    clamped = dragClamp(700, 300, 400, 300, 1000, 800, 10, overshoot_x, overshoot_y);
+    try std.testing.expectEqual(@as(i32, 0), clamped.cam_dx);
+    try std.testing.expectEqual(@as(i32, 0), clamped.cam_dy);
+    overshoot_x += clamped.cam_dx;
+    // 事件 3：指针再右移 5px（累计超出 115），相机只追加 5
+    clamped = dragClamp(705, 300, 400, 300, 1000, 800, 10, overshoot_x, overshoot_y);
+    try std.testing.expectEqual(@as(i32, 5), clamped.cam_dx);
+    overshoot_x += clamped.cam_dx;
+    try std.testing.expectEqual(@as(i32, 115), overshoot_x);
+    // 事件 4：指针退回屏内（超出 0），相机反向回退 115，累计平移归零（可逆）
+    clamped = dragClamp(300, 300, 400, 300, 1000, 800, 10, overshoot_x, overshoot_y);
+    try std.testing.expectEqual(@as(i32, -115), clamped.cam_dx);
+    overshoot_x += clamped.cam_dx;
+    try std.testing.expectEqual(@as(i32, 0), overshoot_x);
 }
 
 // ---- flex 排列（参考 photo-flex-layout，按窗口创建顺序组织） ----

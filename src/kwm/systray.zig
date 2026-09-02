@@ -1628,7 +1628,14 @@ fn build_snapshot() ?*Snapshot {
     }
     for (regions.items, 0..) |r, i| owned_regions[i] = r;
 
-    const snap = ctx.gpa.create(Snapshot) catch return null;
+    // `create` failure must release the strip and the owned regions manually:
+    // the errdefer above only covers error returns, not `return null`.
+    const snap = ctx.gpa.create(Snapshot) catch {
+        if (strip) |s| _ = s.unref();
+        for (owned_regions) |r| ctx.gpa.free(r.owner);
+        ctx.gpa.free(owned_regions);
+        return null;
+    };
     snap.* = .{
         .strip = strip,
         .width = total,

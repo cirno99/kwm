@@ -138,8 +138,9 @@ pub fn init() void {
 }
 
 pub fn log_panic(msg: []const u8) void {
-    const fd = log_fd;
-    if (fd < 0) return;
+    // Fall back to stderr when the crash logger was never initialized, so
+    // panic messages are not silently swallowed.
+    const fd = if (log_fd < 0) 2 else log_fd;
 
     var buf: [512]u8 = undefined;
     const msg_len = @min(msg.len, buf.len - "PANIC: ".len - 1);

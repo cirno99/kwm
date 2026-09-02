@@ -65,6 +65,9 @@ pub const MoveData = struct {
     start_y: i32,
     origin_output: *Output,
     seat: *Seat,
+    // 拖拽期间上一事件的屏幕边缘超出量（op_delta 为累计位移，相机平移需取增量）
+    prev_overshoot_x: i32 = 0,
+    prev_overshoot_y: i32 = 0,
 };
 pub const ResizeData = struct {
     start_x: i32,
@@ -287,7 +290,7 @@ pub fn destroy(self: *Self) void {
     self.rwm_window.destroy();
     self.rwm_window_node.destroy();
     self.set_appid(null);
-    self.set_title(null);
+    _ = self.set_title(null);
     self.unhandled_events.deinit(ctx.gpa);
 
     ctx.gpa.destroy(self);
@@ -1016,24 +1019,30 @@ fn set_appid(self: *Self, app_id: ?[]const u8) void {
 }
 
 
-fn set_title(self: *Self, title: ?[]const u8) void {
+// Returns true when the title actually changed, so callers can skip
+// redundant damage (terminals often re-send the same title on every prompt).
+fn set_title(self: *Self, title: ?[]const u8) bool {
     if (title) |tt| {
         // reuse the existing allocation when the new title fits, avoiding a
         // free + dupe on every terminal title update
         if (self.title) |old| {
             if (tt.len <= old.len) {
+                if (mem.eql(u8, old, tt)) return false;
                 @memcpy(@constCast(old[0..tt.len]), tt);
                 self.title = old[0..tt.len];
-                return;
+                return true;
             }
             ctx.gpa.free(old);
             self.title = null;
         }
-        self.title = ctx.gpa.dupe(u8, tt) catch return;
+        self.title = ctx.gpa.dupe(u8, tt) catch return false;
+        return true;
     } else if (self.title) |tt| {
         ctx.gpa.free(tt);
         self.title = null;
+        return true;
     }
+    return false;
 }
 
 
@@ -1199,10 +1208,10 @@ fn rwm_window_listener(rwm_window: *river.WindowV1, event: river.WindowV1.Event,
 
             log.debug("<{*}> title: {s}", .{ window, title });
 
-            window.set_title(mem.span(title));
-
-            if (comptime build_options.bar_enabled) {
-                if (window.output) |output| output.bar.damage(.title);
+            if (window.set_title(mem.span(title))) {
+                if (comptime build_options.bar_enabled) {
+                    if (window.output) |output| output.bar.damage(.title);
+                }
             }
         },
         .closed => {

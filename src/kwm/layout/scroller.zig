@@ -105,8 +105,13 @@ pub fn lastColumn(output: *Output) ?*Window {
     return head;
 }
 
+// 纯函数：按 mfact 计算列宽，便于单元测试
+fn columnWidthFromMfact(mfact: f32, available_width: i32) i32 {
+    return @intFromFloat(@as(f32, @floatFromInt(available_width)) * mfact);
+}
+
 fn columnWidth(head: *Window, available_width: i32) i32 {
-    return @intFromFloat(@as(f32, @floatFromInt(available_width)) * head.scroller_mfact);
+    return columnWidthFromMfact(head.scroller_mfact, available_width);
 }
 
 // Navigate to the window above (`.reverse`) or below (`.forward`) `window`
@@ -231,9 +236,14 @@ pub fn swap(a: *Window, b: *Window) void {
     a.link.swapWith(&b.link);
 }
 
-fn rowHeight(window: *Window, available_height: i32, outer_gap: i32) i32 {
+// 纯函数：按 mfact 计算行高（夹紧到至少 1），便于单元测试
+fn rowHeightFromMfact(mfact: f32, available_height: i32, outer_gap: i32) i32 {
     const usable = @max(0, available_height - 2 * outer_gap);
-    return @max(1, @as(i32, @intFromFloat(@as(f32, @floatFromInt(usable)) * window.scroller_row_mfact)));
+    return @max(1, @as(i32, @intFromFloat(@as(f32, @floatFromInt(usable)) * mfact)));
+}
+
+fn rowHeight(window: *Window, available_height: i32, outer_gap: i32) i32 {
+    return rowHeightFromMfact(window.scroller_row_mfact, available_height, outer_gap);
 }
 
 // Lay out a single column. Windows are stacked vertically, the focused window
@@ -338,4 +348,18 @@ pub fn arrange(self: *const Self, output: *Output) !void {
         col_x += width;
         col = next;
     }
+}
+
+test "columnWidthFromMfact 按比例计算列宽" {
+    try std.testing.expectEqual(@as(i32, 500), columnWidthFromMfact(0.5, 1000));
+    try std.testing.expectEqual(@as(i32, 0), columnWidthFromMfact(0, 1000));
+    try std.testing.expectEqual(@as(i32, 1000), columnWidthFromMfact(1, 1000));
+}
+
+test "rowHeightFromMfact 夹紧到至少 1" {
+    try std.testing.expectEqual(@as(i32, 490), rowHeightFromMfact(0.5, 1000, 10));
+    // mfact 为 0 时行高不下探到 0
+    try std.testing.expectEqual(@as(i32, 1), rowHeightFromMfact(0, 1000, 10));
+    // 可用高度被 gap 耗尽时同样夹紧到 1
+    try std.testing.expectEqual(@as(i32, 1), rowHeightFromMfact(0.5, 10, 10));
 }

@@ -1017,7 +1017,18 @@ fn resize_tiled(window: *Window, op_data: Window.ResizeData, new_width: ?i32, ne
         },
         else => return,
     }
-    output.manage();
+    // 节流：op_delta 可能远高于刷新率，arrange 全量重排代价高。delta 基于
+    // start 绝对值计算，跳过的中间帧不会丢失终态，op_release 时 flush。
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    const now: i64 = @as(i64, @intCast(ts.sec)) * std.time.ns_per_s + ts.nsec;
+    if (now - output.tiled_resize_last_manage_ns >= 8 * std.time.ns_per_ms) {
+        output.tiled_resize_last_manage_ns = now;
+        output.tiled_resize_manage_pending = false;
+        output.manage();
+    } else {
+        output.tiled_resize_manage_pending = true;
+    }
 }
 
 // Translate a drag delta into an mfact change for a layout with a master placed
@@ -1077,7 +1088,7 @@ fn rwm_seat_listener(rwm_seat: *river.SeatV1, event: river.SeatV1.Event, seat: *
             const window = ctx.focused_window() orelse return;
             switch (window.operator) {
                 .none => log.warn("<{*}> op delta while no window has an active operator, ignoring", .{seat}),
-                .move => |op_data| {
+                .move => |*op_data| {
                     if (op_data.seat == seat) {
                         const current_output = window.output orelse unreachable;
 
@@ -1098,10 +1109,15 @@ fn rwm_seat_listener(rwm_seat: *river.SeatV1, event: river.SeatV1.Event, seat: *
                                 current_output.width,
                                 current_output.height,
                                 canvas.outer_gap,
+                                op_data.prev_overshoot_x,
+                                op_data.prev_overshoot_y,
                             );
-                            // 超出屏幕边缘的部分转为相机平移，画布坐标保持随指针 1:1
+                            // 超出屏幕边缘的部分转为相机平移，画布坐标保持随指针 1:1；
+                            // op_delta 为累计位移，相机只取超出量的增量，回写供下一事件使用
                             canvas.cam_x += clamped.cam_dx;
                             canvas.cam_y += clamped.cam_dy;
+                            op_data.prev_overshoot_x += clamped.cam_dx;
+                            op_data.prev_overshoot_y += clamped.cam_dy;
                             window.canvas_x = clamped.rx + canvas.cam_x;
                             window.canvas_y = clamped.ry + canvas.cam_y;
                             window.move(clamped.rx, clamped.ry);
@@ -1204,6 +1220,13 @@ fn rwm_seat_listener(rwm_seat: *river.SeatV1, event: river.SeatV1.Event, seat: *
                     .resize => |data| {
                         if (data.seat == seat) {
                             window.prepare_resize(.stop);
+                            // flush 节流期间被跳过的最后一次 arrange，保证终态收敛
+                            if (window.output) |o| {
+                                if (o.tiled_resize_manage_pending) {
+                                    o.tiled_resize_manage_pending = false;
+                                    o.manage();
+                                }
+                            }
                             break;
                         }
                     },
