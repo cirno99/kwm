@@ -12,6 +12,14 @@ const ctx = Context.get();
 
 
 pub fn to_utf8(gpa: mem.Allocator, bytes: []const u8) ![]u32 {
+    // 纯 ASCII 快速路径：每个字节即一个码点，既不需要 UTF-8 校验扫描，
+    // 也不需要按最坏情况预分配后再 realloc 缩小。
+    if (isAscii(bytes)) {
+        const runes = try gpa.alloc(u32, bytes.len);
+        for (bytes, 0..) |b, i| runes[i] = b;
+        return runes;
+    }
+
     const view = try unicode.Utf8View.init(bytes);
 
     // A single decode pass over the input: fill a worst-case sized buffer
@@ -25,6 +33,13 @@ pub fn to_utf8(gpa: mem.Allocator, bytes: []const u8) ![]u32 {
     while (iter.nextCodepoint()) |rune| : (i += 1) runes[i] = rune;
 
     return try gpa.realloc(runes, i);
+}
+
+fn isAscii(bytes: []const u8) bool {
+    for (bytes) |b| {
+        if (b >= 0x80) return false;
+    }
+    return true;
 }
 
 
@@ -71,4 +86,12 @@ test "to_utf8 decodes ascii and multibyte in a single pass" {
     const empty = try to_utf8(testing.allocator, "");
     defer testing.allocator.free(empty);
     try testing.expectEqual(@as(usize, 0), empty.len);
+}
+
+test "isAscii distinguishes 0x7f from 0x80" {
+    try std.testing.expect(isAscii(""));
+    try std.testing.expect(isAscii("hello world"));
+    try std.testing.expect(isAscii(&[_]u8{0x7F}));
+    try std.testing.expect(!isAscii(&[_]u8{0x80}));
+    try std.testing.expect(!isAscii("中"));
 }

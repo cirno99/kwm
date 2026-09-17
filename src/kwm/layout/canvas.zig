@@ -395,24 +395,23 @@ fn restoreFlex(self: *const Self, output: *Output) void {
 // 只改变窗口位置，不改变窗口尺寸：用 flexLayout 的分行信息（box.y 相同的窗口为同一行），
 // 每行内窗口保持自身宽高，按创建顺序从左到右依次摆放。
 fn applyFlex(self: *const Self, output: *Output) !void {
+    // 从复用 arena 分配，避免每次 flex 排列都 malloc/free。
+    const alloc = ctx.layout_arena.allocator();
     var windows = std.ArrayListUnmanaged(*Window).empty;
-    defer windows.deinit(ctx.gpa);
     var ratios = std.ArrayListUnmanaged(f32).empty;
-    defer ratios.deinit(ctx.gpa);
 
     var it = ctx.windows.safeIterator(.forward);
     while (it.next()) |window| {
         if (!isTiled(window, output)) continue;
-        try windows.append(ctx.gpa, window);
+        try windows.append(alloc, window);
         const w: f32 = @floatFromInt(if (window.width > 0) window.width else default_width);
         const h: f32 = @floatFromInt(if (window.height > 0) window.height else default_height);
-        try ratios.append(ctx.gpa, w / h);
+        try ratios.append(alloc, w / h);
     }
 
     const container_width = output.width - 2 * self.outer_gap;
     const target_row_height = @divTrunc(output.height * 3, 5); // 60% 输出高度
-    const boxes = try flexLayout(ratios.items, container_width, target_row_height, self.inner_gap, ctx.gpa);
-    defer ctx.gpa.free(boxes);
+    const boxes = try flexLayout(ratios.items, container_width, target_row_height, self.inner_gap, alloc);
 
     // 分行：box.y 相同的窗口为同一行；行内窗口保持自身尺寸，从左到右依次摆放。
     var row_top: i32 = 0;

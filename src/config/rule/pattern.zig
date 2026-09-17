@@ -21,7 +21,7 @@ pub fn clear_cache() void {
 
 fn get_regex(str: []const u8) ?mvzr.Regex {
     if (regex_cache == null) {
-        regex_cache = std.StringHashMap(mvzr.Regex).init(std.heap.page_allocator);
+        regex_cache = std.StringHashMap(mvzr.Regex).init(std.heap.smp_allocator);
     }
     const cache = &regex_cache.?;
 

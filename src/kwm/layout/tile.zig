@@ -149,11 +149,11 @@ pub fn arrange(self: *const Self, output: *Output) !void {
     const usable_width = @max(0, output.exclusive_width() - 2 * self.outer_gap);
     const usable_height = @max(0, output.exclusive_height() - 2 * self.outer_gap);
 
-    const regions = ctx.gpa.alloc(Rect, windows.items.len) catch |err| {
+    // 从复用 arena 分配，避免每次排列都 malloc/free。
+    const regions = ctx.layout_arena.allocator().alloc(Rect, windows.items.len) catch |err| {
         log.err("<{*}> alloc tile regions failed: {}", .{ self, err });
         return;
     };
-    defer ctx.gpa.free(regions);
 
     computeRegions(regions, self.nmaster, self.mfact, self.inner_gap, usable_width, usable_height, self.master_location);
 

@@ -321,6 +321,10 @@ pub fn switch_to_previous_layout(self: *Self) void {
 }
 
 pub fn manage(self: *Self) void {
+    // 排列只会产生短命的临时缓冲，复用 arena 以避免每次 manage 都
+    // malloc/free 一批小分配。
+    _ = ctx.layout_arena.reset(.retain_capacity);
+
     switch (self.current_layout()) {
         .float => {},
         inline else => |layout| layout.arrange(self) catch |err| {

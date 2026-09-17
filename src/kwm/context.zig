@@ -65,6 +65,9 @@ window_to_lift: ?*Window = null,
 windows: wl.list.Head(Window, .link) = undefined,
 focus_stack: wl.list.Head(Window, .flink) = undefined,
 layout_windows: std.ArrayList(*Window) = .empty,
+    // 布局排列（arrange）临时缓冲的复用分配器：每次 manage 前 reset，
+    // 避免每次排列都 malloc/free 一批短命缓冲。
+    layout_arena: heap.ArenaAllocator,
 minimized_order: [32]?*Window = undefined,
 minimized_order_len: usize = 0,
 
@@ -135,6 +138,7 @@ pub fn init(
         .key_repeat = .{ .timer_fd = undefined },
         .terminal_windows = .init(gpa),
         .output_states = .init(gpa),
+        .layout_arena = .init(gpa),
         .mode = fmt.bufPrint(&mode_buffer, "{s}", .{config.default_mode}) catch return error.ModeNameTooLong,
     };
 
@@ -230,6 +234,7 @@ pub fn deinit() void {
 
     ctx.terminal_windows.deinit();
     ctx.layout_windows.deinit(ctx.gpa);
+    ctx.layout_arena.deinit();
 
     {
         var it = ctx.output_states.iterator();
@@ -1363,6 +1368,11 @@ fn render_windows(self: *Self) void {
     const unfocus_color = self.cfg.border.color.unfocus;
     const exclusive_focus = self.focus_exclusive();
 
+    // 本帧是否有窗口被提升到顶层（sticky/floating）。仅当确实发生提升时，
+    // 才需要把 sticky 窗口重新压回顶层；否则跳过整个遍历，避免每帧对每个
+    // sticky 窗口都发送一次 placeTop 协议请求。
+    var top_raised = false;
+
     {
         var it = self.windows.safeIterator(.forward);
         while (it.next()) |window| {
@@ -1382,8 +1392,10 @@ fn render_windows(self: *Self) void {
                 if (window.sticky) {
                     // sticky 窗口在所有工作区最上层
                     window.place(.top);
+                    top_raised = true;
                 } else if (window.floating) {
                     window.place(.top);
+                    top_raised = true;
                 } else {
                     window.place(.{
                         .below = self.layer_marker.rwm_shell_surface_node,
@@ -1397,6 +1409,7 @@ fn render_windows(self: *Self) void {
         self.window_to_lift = null;
         if (window.floating) {
             window.place(.top);
+            top_raised = true;
         } else {
             window.place(.{
                 .below = self.layer_marker.rwm_shell_surface_node,
@@ -1404,8 +1417,9 @@ fn render_windows(self: *Self) void {
         }
     }
 
-    // sticky 窗口始终保持顶层，防止新窗口或焦点提升盖住它们
-    {
+    // sticky 窗口始终保持顶层，防止新窗口或焦点提升盖住它们。
+    // 只有本帧确实有窗口被提升到顶层时才需要重新提升。
+    if (top_raised) {
         var it = self.windows.safeIterator(.forward);
         while (it.next()) |window| {
             if (window.sticky and window.is_visible()) {
